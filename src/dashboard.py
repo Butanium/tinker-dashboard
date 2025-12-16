@@ -174,7 +174,6 @@ class TinkerDashboard:
             )
             total_count = len(st.session_state.managed_models)
 
-
     def display(self) -> None:
         """Main entry point for the dashboard."""
         st.set_page_config(
@@ -187,12 +186,14 @@ class TinkerDashboard:
 
         self._render_sidebar()
 
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "Models",
-            "Multi-Generation",
-            "Chat",
-            "Multi-Prompt",
-        ])
+        tab1, tab2, tab3, tab4 = st.tabs(
+            [
+                "Models",
+                "Multi-Generation",
+                "Chat",
+                "Multi-Prompt",
+            ]
+        )
 
         with tab1:
             render_models_tab()

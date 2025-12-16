@@ -27,6 +27,7 @@ def _get_sampling_params(n: int = 1) -> SamplingParams:
 def _save_conversation(conv_id: str) -> None:
     """Save conversation to cache."""
     from ..dashboard_state import save_conversation
+
     conv = st.session_state.conversations.get(conv_id)
     if conv:
         save_conversation(st.session_state.cache_dir / "conversations", conv_id, conv)
@@ -161,7 +162,9 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
         with cols[col_idx]:
             with st.expander(f"Sample {idx + 1}", expanded=True):
                 st.markdown(sample)
-                if st.button(f"Use sample {idx + 1}", key=f"use_sample_{conv_id}_{idx}"):
+                if st.button(
+                    f"Use sample {idx + 1}", key=f"use_sample_{conv_id}_{idx}"
+                ):
                     conv["history"].append({"role": "assistant", "content": sample})
                     conv.pop("pending_samples", None)
                     conv.pop("cached_samples", None)
@@ -178,9 +181,7 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
 
 def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
     """Handle multi-model mode: generate from all active models."""
-    active_models = [
-        mm for mm in st.session_state.managed_models.values() if mm.active
-    ]
+    active_models = [mm for mm in st.session_state.managed_models.values() if mm.active]
 
     if not active_models:
         st.error("No active models")
@@ -198,7 +199,9 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                 tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
                 messages = []
                 if conv.get("system_prompt"):
-                    messages.append({"role": "system", "content": conv["system_prompt"]})
+                    messages.append(
+                        {"role": "system", "content": conv["system_prompt"]}
+                    )
                 messages.extend(conv["history"])
 
                 prompt_tokens = tokenizer.apply_chat_template(
@@ -208,7 +211,13 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                 )
 
                 result = inference.sample_from_tokens(mm, prompt_tokens, params)
-                results.append({"model_id": mm.model_id, "name": mm.config.name, "response": result["results"][0]})
+                results.append(
+                    {
+                        "model_id": mm.model_id,
+                        "name": mm.config.name,
+                        "response": result["results"][0],
+                    }
+                )
 
         conv["cached_model_samples"] = results
         _save_conversation(conv_id)
@@ -223,7 +232,9 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
             with st.expander(f"{result_data['name']}", expanded=idx == 0):
                 st.markdown(result_data["response"])
                 if st.button(f"Use this", key=f"use_model_{conv_id}_{idx}"):
-                    conv["history"].append({"role": "assistant", "content": result_data["response"]})
+                    conv["history"].append(
+                        {"role": "assistant", "content": result_data["response"]}
+                    )
                     conv["model_id"] = result_data["model_id"]
                     conv.pop("pending_multi_model", None)
                     conv.pop("cached_model_samples", None)
@@ -298,7 +309,9 @@ def _render_chat_messages(conv_id: str, conv: dict[str, Any]) -> None:
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("Save", key=f"save_edit_{conv_id}_{i}", type="primary"):
+                    if st.button(
+                        "Save", key=f"save_edit_{conv_id}_{i}", type="primary"
+                    ):
                         conv["history"][i]["content"] = edited
                         conv["editing_idx"] = None
                         _save_conversation(conv_id)
@@ -333,8 +346,7 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
     with col2:
         model_options = list(st.session_state.managed_models.keys())
         model_names = {
-            mid: mm.config.name
-            for mid, mm in st.session_state.managed_models.items()
+            mid: mm.config.name for mid, mm in st.session_state.managed_models.items()
         }
         current_idx = (
             model_options.index(conv["model_id"])
@@ -357,7 +369,9 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
         gen_mode = st.selectbox(
             "Gen mode",
             options=["single", "multi-sample", "multi-model"],
-            index=["single", "multi-sample", "multi-model"].index(conv.get("gen_mode", "single")),
+            index=["single", "multi-sample", "multi-model"].index(
+                conv.get("gen_mode", "single")
+            ),
             key=f"conv_gen_mode_{conv_id}",
             label_visibility="collapsed",
             help="single: one sample | multi-sample: N samples from current model | multi-model: one sample from each active model",
@@ -416,6 +430,7 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
     with col2:
         if st.button("Delete Chat", key=f"delete_{conv_id}"):
             from ..dashboard_state import delete_conversation
+
             delete_conversation(st.session_state.cache_dir / "conversations", conv_id)
             del st.session_state.conversations[conv_id]
             st.rerun(scope="app")

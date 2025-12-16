@@ -128,6 +128,7 @@ def _load_ui_state(path: Path) -> dict:
 
 # Model persistence
 
+
 def save_models_to_folder(
     models: dict[str, ManagedModel], base_dir: Path, folder: str | None
 ) -> None:
@@ -204,6 +205,7 @@ def unload_folder_models(
 
 
 # Prompt persistence
+
 
 def save_prompts_to_folder(
     prompts: dict[str, ManagedPrompt], base_dir: Path, folder: str | None
@@ -283,6 +285,7 @@ def unload_folder_prompts(
 
 # Loaded folders state
 
+
 def save_loaded_folders(
     path: Path, model_folders: set[str | None], prompt_folders: set[str | None]
 ) -> None:
@@ -314,6 +317,7 @@ def load_loaded_folders(
 
 # Conversation persistence
 
+
 def save_conversation(conv_dir: Path, conv_id: str, conv: dict) -> None:
     """Save a single conversation to disk."""
     conv_dir.mkdir(parents=True, exist_ok=True)
@@ -343,6 +347,7 @@ def delete_conversation(conv_dir: Path, conv_id: str) -> None:
 
 
 # Generation logging
+
 
 @dataclass
 class GenerationLog:

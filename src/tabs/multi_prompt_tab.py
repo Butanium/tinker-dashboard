@@ -70,9 +70,14 @@ def _render_text_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
     template_mode = st.selectbox(
         "Template Mode",
         options=["Apply chat template", "No template", "Apply loom template"],
-        index=["Apply chat template", "No template", "Apply loom template"].index(mp.template_mode)
-        if mp.template_mode in ["Apply chat template", "No template", "Apply loom template"]
-        else 0,
+        index=(
+            ["Apply chat template", "No template", "Apply loom template"].index(
+                mp.template_mode
+            )
+            if mp.template_mode
+            in ["Apply chat template", "No template", "Apply loom template"]
+            else 0
+        ),
         key=f"prompt_template_{prompt_id}",
     )
     if template_mode != mp.template_mode:
@@ -147,12 +152,16 @@ def _render_messages_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("+ User", key=f"prompt_add_user_{prompt_id}", use_container_width=True):
+        if st.button(
+            "+ User", key=f"prompt_add_user_{prompt_id}", use_container_width=True
+        ):
             mp.messages.append({"role": "user", "content": ""})
             _save_prompts()
             st.rerun(scope="fragment")
     with col2:
-        if st.button("+ Assistant", key=f"prompt_add_asst_{prompt_id}", use_container_width=True):
+        if st.button(
+            "+ Assistant", key=f"prompt_add_asst_{prompt_id}", use_container_width=True
+        ):
             mp.messages.append({"role": "assistant", "content": ""})
             _save_prompts()
             st.rerun(scope="fragment")
@@ -309,7 +318,9 @@ def _run_multi_prompt_generation(
             prompt_results["models"].append(result)
 
             current += 1
-            progress.progress(current / total, text=f"Generating... ({current}/{total})")
+            progress.progress(
+                current / total, text=f"Generating... ({current}/{total})"
+            )
 
         results.append(prompt_results)
 
@@ -356,9 +367,7 @@ def render_multi_prompt_tab() -> None:
     active_prompts = [
         mp for mp in st.session_state.managed_prompts.values() if mp.active
     ]
-    active_models = [
-        mm for mm in st.session_state.managed_models.values() if mm.active
-    ]
+    active_models = [mm for mm in st.session_state.managed_models.values() if mm.active]
 
     col1, col2, col3 = st.columns([2, 2, 1])
 
@@ -381,7 +390,9 @@ def render_multi_prompt_tab() -> None:
             selected_models = []
 
     with col2:
-        st.write(f"**{len(active_prompts)} prompt(s), {len(selected_models)} model(s)**")
+        st.write(
+            f"**{len(active_prompts)} prompt(s), {len(selected_models)} model(s)**"
+        )
 
     with col3:
         if st.button(

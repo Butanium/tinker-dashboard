@@ -103,7 +103,9 @@ def _render_import_section() -> None:
             st.markdown("**From Saved Prompts**")
             prompts = st.session_state.get("managed_prompts", {})
             if prompts:
-                prompt_options = {mp.prompt_id: mp.get_display_name() for mp in prompts.values()}
+                prompt_options = {
+                    mp.prompt_id: mp.get_display_name() for mp in prompts.values()
+                }
                 selected_prompt = st.selectbox(
                     "Select prompt",
                     options=list(prompt_options.keys()),
@@ -128,7 +130,9 @@ def _render_import_section() -> None:
             st.markdown("**From Chat Conversations**")
             convs = st.session_state.get("conversations", {})
             if convs:
-                conv_options = {cid: conv.get("name", cid) for cid, conv in convs.items()}
+                conv_options = {
+                    cid: conv.get("name", cid) for cid, conv in convs.items()
+                }
                 selected_conv = st.selectbox(
                     "Select conversation",
                     options=list(conv_options.keys()),
@@ -241,7 +245,9 @@ def _render_message_builder_tab() -> None:
     )
 
 
-def _continue_to_chat(result_data: dict, results_data: dict, sample_idx: int = 0) -> None:
+def _continue_to_chat(
+    result_data: dict, results_data: dict, sample_idx: int = 0
+) -> None:
     """Create a new chat from a generation result."""
     from .chat_tab import create_conversation
 
@@ -302,9 +308,7 @@ def render_multi_gen_tab() -> None:
     st.markdown("## Multi-Generation")
     st.markdown("Generate text with multiple models side-by-side.")
 
-    active_models = [
-        mm for mm in st.session_state.managed_models.values() if mm.active
-    ]
+    active_models = [mm for mm in st.session_state.managed_models.values() if mm.active]
 
     if not active_models:
         st.warning("No active models. Enable models in the Models tab.")
@@ -353,7 +357,9 @@ def render_multi_gen_tab() -> None:
                 st.error("Please enter a prompt")
                 return
 
-            template_mode = st.session_state.get("multi_gen_template_mode", "Apply chat template")
+            template_mode = st.session_state.get(
+                "multi_gen_template_mode", "Apply chat template"
+            )
             system_prompt = st.session_state.get("multi_gen_system_prompt", "")
             assistant_prefill = st.session_state.get("multi_gen_assistant_prefill", "")
 
@@ -403,7 +409,9 @@ def render_multi_gen_tab() -> None:
         elif active_tab == "Messages":
             messages = st.session_state.get("multi_gen_messages", [])
             system_prompt = st.session_state.get("msg_builder_system", "")
-            template_override = st.session_state.get("msg_builder_template_override", "Auto")
+            template_override = st.session_state.get(
+                "msg_builder_template_override", "Auto"
+            )
 
             st.markdown("## Generating from Messages...")
             output_cols = st.columns(2)
@@ -478,7 +486,9 @@ def render_multi_gen_tab() -> None:
                 for msg in results_data["messages"]:
                     st.markdown(f"**{msg['role']}:** {msg['content']}")
             else:
-                st.code(results_data.get("prompt", ""), language="text", wrap_lines=True)
+                st.code(
+                    results_data.get("prompt", ""), language="text", wrap_lines=True
+                )
 
         st.markdown("## Generated Outputs")
         output_cols = st.columns(2)

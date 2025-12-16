@@ -20,9 +20,7 @@ from ..dashboard_state import (
 
 def _create_new_model(folder: str | None) -> ManagedModel:
     """Create a new model configuration."""
-    existing_names = {
-        mm.config.name for mm in st.session_state.managed_models.values()
-    }
+    existing_names = {mm.config.name for mm in st.session_state.managed_models.values()}
     unique_name = get_unique_name("New Model", existing_names)
 
     config = ModelConfig(
