@@ -74,7 +74,6 @@ class TinkerInference:
         mm: ManagedModel,
         prompt_tokens: list[int],
         params: SamplingParams,
-        skip_last_token: bool = False,
     ) -> list[str]:
         """
         Sample from a model and decode with the specified tokenizer.
@@ -83,10 +82,9 @@ class TinkerInference:
             mm: ManagedModel instance
             prompt_tokens: Tokenized prompt
             params: Sampling parameters
-            skip_last_token: Whether to skip the last token in decoding
 
         Returns:
-            List of decoded text samples
+            List of decoded text samples (last token always skipped)
         """
         sampling_cl = self._get_sampling_client(
             mm.config.sampler_path, mm.config.base_model
@@ -109,9 +107,7 @@ class TinkerInference:
 
         samples = []
         for seq in result.sequences:
-            tokens = seq.tokens
-            if skip_last_token:
-                tokens = tokens[:-1]
+            tokens = seq.tokens[:-1]
             text = tokenizer.decode(
                 tokens, skip_special_tokens=params.skip_special_tokens
             )
@@ -191,7 +187,7 @@ class TinkerInference:
             tokenizer = self.get_tokenizer(mm.config.base_model)
             samples = [
                 tokenizer.decode(
-                    seq.tokens, skip_special_tokens=params.skip_special_tokens
+                    seq.tokens[:-1], skip_special_tokens=params.skip_special_tokens
                 )
                 for seq in result.sequences
             ]
@@ -208,7 +204,6 @@ class TinkerInference:
         mm: ManagedModel,
         prompt_tokens: list[int],
         params: SamplingParams,
-        skip_last_token: bool = False,
     ) -> dict:
         """
         Sample from a single model with pre-tokenized prompt.
@@ -225,7 +220,6 @@ class TinkerInference:
             mm=mm,
             prompt_tokens=prompt_tokens,
             params=params,
-            skip_last_token=skip_last_token,
         )
         return {
             "model": mm,
@@ -280,7 +274,7 @@ class TinkerInference:
             tokenizer = self.get_tokenizer(mm.config.base_model)
             samples = [
                 tokenizer.decode(
-                    seq.tokens, skip_special_tokens=params.skip_special_tokens
+                    seq.tokens[:-1], skip_special_tokens=params.skip_special_tokens
                 )
                 for seq in result.sequences
             ]

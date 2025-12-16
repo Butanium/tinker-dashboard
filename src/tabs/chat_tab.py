@@ -105,6 +105,7 @@ def _generate_response(
     conv_id: str,
     conv: dict[str, Any],
     continue_from_idx: int | None = None,
+    prefill: str = "",
 ) -> str:
     """
     Generate a response for the conversation.
@@ -113,9 +114,10 @@ def _generate_response(
         conv_id: Conversation ID
         conv: Conversation dict
         continue_from_idx: If set, continue from this message index
+        prefill: Optional assistant prefill text
 
     Returns:
-        Generated response text
+        Generated response text (prefill + generated)
     """
     model_id = conv["model_id"]
     mm = st.session_state.managed_models.get(model_id)
@@ -135,8 +137,13 @@ def _generate_response(
         continue_final = not add_gen_prompt
     else:
         messages.extend(conv["history"])
-        add_gen_prompt = True
-        continue_final = False
+        if prefill:
+            messages.append({"role": "assistant", "content": prefill})
+            add_gen_prompt = False
+            continue_final = True
+        else:
+            add_gen_prompt = True
+            continue_final = False
 
     prompt_tokens = tokenizer.apply_chat_template(
         messages,
@@ -146,9 +153,7 @@ def _generate_response(
     )
 
     params = _get_sampling_params(n=1)
-    result = inference.sample_from_tokens(
-        mm, prompt_tokens, params, skip_last_token=True
-    )
+    result = inference.sample_from_tokens(mm, prompt_tokens, params)
     response = result["results"][0]
 
     _log_chat_generation(
@@ -171,10 +176,12 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
     if mm is None:
         st.error("Model not found")
         conv.pop("pending_samples", None)
+        conv.pop("pending_prefill", None)
         _save_conversation(conv_id)
         return
 
     n_samples = st.session_state.sampling_params.get("n", 4)
+    prefill = conv.get("pending_prefill", "")
 
     if "cached_samples" not in conv:
         inference = st.session_state.inference
@@ -185,22 +192,34 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
             messages.append({"role": "system", "content": conv["system_prompt"]})
         messages.extend(conv["history"])
 
-        prompt_tokens = tokenizer.apply_chat_template(
-            messages,
-            add_special_tokens=True,
-            add_generation_prompt=True,
-        )
+        if prefill:
+            messages.append({"role": "assistant", "content": prefill})
+            prompt_tokens = tokenizer.apply_chat_template(
+                messages,
+                add_special_tokens=True,
+                continue_final_message=True,
+            )
+        else:
+            prompt_tokens = tokenizer.apply_chat_template(
+                messages,
+                add_special_tokens=True,
+                add_generation_prompt=True,
+            )
 
+        conv["cached_prompt_tokens"] = prompt_tokens
         params = _get_sampling_params(n=n_samples)
 
         with st.spinner(f"Generating {n_samples} samples from {mm.config.name}..."):
             result = inference.sample_from_tokens(mm, prompt_tokens, params)
 
-        conv["cached_samples"] = result["results"]
+        samples = result["results"]
+        if prefill:
+            samples = [prefill + s for s in samples]
+        conv["cached_samples"] = samples
         _log_chat_generation(
             mm=mm,
             prompt_tokens=prompt_tokens,
-            outputs=result["results"],
+            outputs=samples,
             params=params,
             system_prompt=conv.get("system_prompt", ""),
             messages=messages,
@@ -208,7 +227,67 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
         _save_conversation(conv_id)
 
     samples = conv["cached_samples"]
+    prompt_tokens = conv.get("cached_prompt_tokens", [])
+    inference = st.session_state.inference
+    tokenizer = inference.get_tokenizer(mm.config.base_model)
+
     st.markdown(f"### Select one of {len(samples)} samples from **{mm.config.name}**:")
+
+    with st.expander("Prompt (with special tokens)", expanded=False):
+        decoded_prompt = tokenizer.decode(prompt_tokens, skip_special_tokens=False)
+        st.code(decoded_prompt, language=None)
+
+    col_actions = st.columns(4)
+    with col_actions[0]:
+        if st.button("Regenerate all", key=f"regen_all_{conv_id}"):
+            conv.pop("cached_samples", None)
+            conv.pop("cached_prompt_tokens", None)
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
+    with col_actions[1]:
+        if st.button("Continue all", key=f"cont_all_{conv_id}"):
+            params = _get_sampling_params(n=1)
+            continued = []
+            for sample in samples:
+                cont_messages = []
+                if conv.get("system_prompt"):
+                    cont_messages.append({"role": "system", "content": conv["system_prompt"]})
+                cont_messages.extend(conv["history"])
+                cont_messages.append({"role": "assistant", "content": sample})
+                cont_tokens = tokenizer.apply_chat_template(
+                    cont_messages,
+                    add_special_tokens=True,
+                    continue_final_message=True,
+                )
+                result = inference.sample_from_tokens(mm, cont_tokens, params)
+                continued.append(sample + result["results"][0])
+            conv["cached_samples"] = continued
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
+    with col_actions[2]:
+        md_content = f"# Samples from {mm.config.name}\n\n"
+        md_content += f"**Prompt:** {conv['history'][-1]['content']}\n\n"
+        if prefill:
+            md_content += f"**Prefill:** {prefill}\n\n"
+        md_content += "---\n\n"
+        for idx, sample in enumerate(samples):
+            md_content += f"## Sample {idx + 1}\n\n{sample}\n\n---\n\n"
+        st.download_button(
+            "Save all (markdown)",
+            data=md_content,
+            file_name=f"samples_{conv_id}.md",
+            mime="text/markdown",
+            key=f"save_md_{conv_id}",
+        )
+    with col_actions[3]:
+        if st.button("Cancel", key=f"cancel_samples_{conv_id}"):
+            conv["history"].pop()
+            conv.pop("pending_samples", None)
+            conv.pop("pending_prefill", None)
+            conv.pop("cached_samples", None)
+            conv.pop("cached_prompt_tokens", None)
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
 
     cols = st.columns(2)
     for idx, sample in enumerate(samples):
@@ -227,16 +306,11 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
                         }
                     )
                     conv.pop("pending_samples", None)
+                    conv.pop("pending_prefill", None)
                     conv.pop("cached_samples", None)
+                    conv.pop("cached_prompt_tokens", None)
                     _save_conversation(conv_id)
                     st.rerun(scope="fragment")
-
-    if st.button("Cancel", key=f"cancel_samples_{conv_id}"):
-        conv["history"].pop()
-        conv.pop("pending_samples", None)
-        conv.pop("cached_samples", None)
-        _save_conversation(conv_id)
-        st.rerun(scope="fragment")
 
 
 def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
@@ -246,8 +320,11 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
     if not active_models:
         st.error("No active models")
         conv.pop("pending_multi_model", None)
+        conv.pop("pending_prefill", None)
         _save_conversation(conv_id)
         return
+
+    prefill = conv.get("pending_prefill", "")
 
     if "cached_model_samples" not in conv:
         inference = st.session_state.inference
@@ -264,17 +341,28 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                     )
                 messages.extend(conv["history"])
 
-                prompt_tokens = tokenizer.apply_chat_template(
-                    messages,
-                    add_special_tokens=True,
-                    add_generation_prompt=True,
-                )
+                if prefill:
+                    messages.append({"role": "assistant", "content": prefill})
+                    prompt_tokens = tokenizer.apply_chat_template(
+                        messages,
+                        add_special_tokens=True,
+                        continue_final_message=True,
+                    )
+                else:
+                    prompt_tokens = tokenizer.apply_chat_template(
+                        messages,
+                        add_special_tokens=True,
+                        add_generation_prompt=True,
+                    )
 
                 result = inference.sample_from_tokens(mm, prompt_tokens, params)
+                response = result["results"][0]
+                if prefill:
+                    response = prefill + response
                 _log_chat_generation(
                     mm=mm,
                     prompt_tokens=prompt_tokens,
-                    outputs=result["results"],
+                    outputs=[response],
                     params=params,
                     system_prompt=conv.get("system_prompt", ""),
                     messages=messages,
@@ -283,7 +371,9 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                     {
                         "model_id": mm.model_id,
                         "name": mm.config.name,
-                        "response": result["results"][0],
+                        "base_model": mm.config.base_model,
+                        "response": response,
+                        "prompt_tokens": prompt_tokens,
                     }
                 )
 
@@ -291,7 +381,67 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
         _save_conversation(conv_id)
 
     results = conv["cached_model_samples"]
+    inference = st.session_state.inference
+
     st.markdown(f"### Select response from one of {len(results)} models:")
+
+    with st.expander("Prompts (with special tokens)", expanded=False):
+        for result_data in results:
+            tokenizer = inference.get_tokenizer(result_data["base_model"])
+            decoded = tokenizer.decode(result_data["prompt_tokens"], skip_special_tokens=False)
+            st.markdown(f"**{result_data['name']}:**")
+            st.code(decoded, language=None)
+
+    col_actions = st.columns(4)
+    with col_actions[0]:
+        if st.button("Regenerate all", key=f"regen_all_models_{conv_id}"):
+            conv.pop("cached_model_samples", None)
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
+    with col_actions[1]:
+        if st.button("Continue all", key=f"cont_all_models_{conv_id}"):
+            params = _get_sampling_params(n=1)
+            for result_data in results:
+                mm = st.session_state.managed_models.get(result_data["model_id"])
+                assert mm is not None
+                tokenizer = inference.get_tokenizer(mm.config.base_model)
+                cont_messages = []
+                if conv.get("system_prompt"):
+                    cont_messages.append({"role": "system", "content": conv["system_prompt"]})
+                cont_messages.extend(conv["history"])
+                cont_messages.append({"role": "assistant", "content": result_data["response"]})
+                cont_tokens = tokenizer.apply_chat_template(
+                    cont_messages,
+                    add_special_tokens=True,
+                    continue_final_message=True,
+                )
+                result = inference.sample_from_tokens(mm, cont_tokens, params)
+                result_data["response"] = result_data["response"] + result["results"][0]
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
+    with col_actions[2]:
+        md_content = "# Multi-model samples\n\n"
+        md_content += f"**Prompt:** {conv['history'][-1]['content']}\n\n"
+        if prefill:
+            md_content += f"**Prefill:** {prefill}\n\n"
+        md_content += "---\n\n"
+        for result_data in results:
+            md_content += f"## {result_data['name']}\n\n{result_data['response']}\n\n---\n\n"
+        st.download_button(
+            "Save all (markdown)",
+            data=md_content,
+            file_name=f"multi_model_{conv_id}.md",
+            mime="text/markdown",
+            key=f"save_md_models_{conv_id}",
+        )
+    with col_actions[3]:
+        if st.button("Cancel", key=f"cancel_models_{conv_id}"):
+            conv["history"].pop()
+            conv.pop("pending_multi_model", None)
+            conv.pop("pending_prefill", None)
+            conv.pop("cached_model_samples", None)
+            _save_conversation(conv_id)
+            st.rerun(scope="fragment")
 
     cols = st.columns(2)
     for idx, result_data in enumerate(results):
@@ -309,16 +459,10 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                     )
                     conv["model_id"] = result_data["model_id"]
                     conv.pop("pending_multi_model", None)
+                    conv.pop("pending_prefill", None)
                     conv.pop("cached_model_samples", None)
                     _save_conversation(conv_id)
                     st.rerun(scope="fragment")
-
-    if st.button("Cancel", key=f"cancel_models_{conv_id}"):
-        conv["history"].pop()
-        conv.pop("pending_multi_model", None)
-        conv.pop("cached_model_samples", None)
-        _save_conversation(conv_id)
-        st.rerun(scope="fragment")
 
 
 def _render_message_actions(
@@ -468,21 +612,33 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
 
     user_input = st.chat_input("Message...", key=f"chat_input_{conv_id}")
 
+    prefill_key = f"prefill_{conv_id}"
+    prefill = st.text_area(
+        "Assistant prefill",
+        key=prefill_key,
+        placeholder="Optional: start the assistant response with...",
+        height=68,
+    )
+
     if user_input:
         conv["history"].append({"role": "user", "content": user_input})
         gen_mode = conv.get("gen_mode", "single")
 
         if gen_mode == "multi-sample":
             conv["pending_samples"] = True
+            conv["pending_prefill"] = prefill
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
         elif gen_mode == "multi-model":
             conv["pending_multi_model"] = True
+            conv["pending_prefill"] = prefill
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
         else:
             with st.spinner("Generating..."):
-                response = _generate_response(conv_id, conv)
+                response = _generate_response(conv_id, conv, prefill=prefill)
+            if prefill:
+                response = prefill + response
             conv["history"].append(
                 {"role": "assistant", "content": response, "model_id": conv["model_id"]}
             )
