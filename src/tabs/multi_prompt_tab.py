@@ -23,6 +23,7 @@ from ..dashboard_state import (
 from ..folder_manager_ui import FolderManagerUI, FolderManagerConfig
 from ..inference import SamplingParams
 from .multi_gen_tab import render_sample_cycler
+from .result_actions import render_result_actions
 
 
 def _get_sampling_params() -> SamplingParams:
@@ -404,7 +405,9 @@ def _run_multi_prompt_generation(
 
         tokenizer = inference.get_tokenizer(mm.config.base_model)
         samples = [
-            tokenizer.decode(seq.tokens, skip_special_tokens=params.skip_special_tokens)
+            tokenizer.decode(
+                seq.tokens[:-1], skip_special_tokens=params.skip_special_tokens
+            )
             for seq in result.sequences
         ]
 
@@ -451,21 +454,61 @@ def _render_results() -> None:
         st.info("No results yet. Select prompts and models, then click Run.")
         return
 
-    for prompt_result in results:
+    inference = st.session_state.inference
+
+    col_actions = st.columns(2)
+    with col_actions[0]:
+        md_content = "# Multi-Prompt Results\n\n"
+        for prompt_result in results:
+            mp = prompt_result["prompt"]
+            md_content += f"## {mp.get_display_name()}\n\n"
+            if mp.prompt_mode == "messages":
+                md_content += "**Messages:**\n"
+                for msg in mp.messages:
+                    md_content += f"- {msg['role']}: {msg['content']}\n"
+                md_content += "\n"
+            else:
+                md_content += f"**Prompt:** {mp.content}\n\n"
+            if mp.system_prompt:
+                md_content += f"**System:** {mp.system_prompt}\n\n"
+            for model_result in prompt_result["models"]:
+                mm = model_result["model"]
+                md_content += f"### {mm.config.name}\n\n"
+                for idx, sample in enumerate(model_result["results"]):
+                    if len(model_result["results"]) > 1:
+                        md_content += f"#### Sample {idx + 1}\n\n"
+                    md_content += f"{sample}\n\n"
+            md_content += "---\n\n"
+        st.download_button(
+            "Save all",
+            data=md_content,
+            file_name="multi_prompt_results.md",
+            mime="text/markdown",
+            key="mp_save_md",
+        )
+    with col_actions[1]:
+        if st.button("Clear results", key="mp_clear"):
+            st.session_state.multi_prompt_results = None
+            st.rerun(scope="fragment")
+
+    for prompt_idx, prompt_result in enumerate(results):
         mp = prompt_result["prompt"]
         st.markdown(f"### {mp.get_display_name()}")
 
-        with st.expander("Prompt", expanded=False):
-            if mp.prompt_mode == "messages":
-                for msg in mp.messages:
-                    st.markdown(f"**{msg['role']}:** {msg['content']}")
-            else:
-                st.code(mp.content, language="text", wrap_lines=True)
+        with st.expander("Prompt (with special tokens)", expanded=False):
+            for model_result in prompt_result["models"]:
+                mm = model_result["model"]
+                tokenizer = inference.get_tokenizer(mm.config.base_model)
+                decoded = tokenizer.decode(
+                    model_result["prompt_tokens"], skip_special_tokens=False
+                )
+                st.markdown(f"**{mm.config.name}:**")
+                st.code(decoded, language=None)
 
         cols = st.columns(min(len(prompt_result["models"]), 3))
-        for idx, model_result in enumerate(prompt_result["models"]):
+        for model_idx, model_result in enumerate(prompt_result["models"]):
             mm = model_result["model"]
-            col_idx = idx % len(cols)
+            col_idx = model_idx % len(cols)
             with cols[col_idx]:
                 with st.expander(mm.config.name, expanded=True):
                     if model_result and model_result["results"]:
@@ -473,6 +516,12 @@ def _render_results() -> None:
                             samples=model_result["results"],
                             component_id=f"mp_cycler_{mp.prompt_id}_{mm.model_id}",
                             height=400,
+                        )
+                        render_result_actions(
+                            result_data=model_result,
+                            prompt_info={"managed_prompt": mp},
+                            key_prefix=f"mp_result_{prompt_idx}_{model_idx}",
+                            on_update=lambda: st.rerun(scope="fragment"),
                         )
                     else:
                         st.info("No results")

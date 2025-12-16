@@ -14,6 +14,7 @@ import streamlit.components.v1 as components
 
 from ..inference import SamplingParams
 from ..dashboard_state import GenerationLog, save_generation_log
+from .result_actions import render_result_actions, render_decoded_prompt
 
 
 COMPONENTS_DIR = Path(__file__).parent.parent.parent / "components"
@@ -234,7 +235,7 @@ def _render_message_builder_tab() -> None:
             messages.append({"role": "assistant", "content": ""})
             st.rerun(scope="fragment")
 
-    template_override = st.selectbox(
+    st.selectbox(
         "Template Override",
         options=[
             "Auto (based on last message)",
@@ -243,6 +244,43 @@ def _render_message_builder_tab() -> None:
         ],
         key="msg_builder_template_override",
     )
+
+
+def _render_generation_controls(
+    suffix: str, label: str, disabled: bool = False
+) -> bool:
+    """
+    Render generation buttons and clear results button.
+
+    Args:
+        suffix: Unique suffix for widget keys (e.g. 'text', 'msg')
+        label: Label for the generate button (e.g. 'Text', 'Messages')
+        disabled: Whether the generate button should be disabled
+
+    Returns:
+        True if the generate button was clicked
+    """
+    st.markdown("---")
+    col1, col2 = st.columns([3, 1])
+    clicked = False
+    with col1:
+        if st.button(
+            f"🚀 Generate {label}",
+            type="primary",
+            use_container_width=True,
+            key=f"gen_{suffix}_btn",
+            disabled=disabled,
+        ):
+            clicked = True
+    with col2:
+        if st.button(
+            "🗑️ Clear Results",
+            key=f"clear_{suffix}_btn",
+            disabled=st.session_state.get("multi_gen_results") is None,
+        ):
+            st.session_state.multi_gen_results = None
+            st.rerun(scope="fragment")
+    return clicked
 
 
 def _continue_to_chat(
@@ -278,7 +316,7 @@ def _render_result_card(
     results_data: dict,
     disabled: bool = False,
 ) -> None:
-    """Render a single result card with sample cycling and continue button."""
+    """Render a single result card with sample cycling and action buttons."""
     mm = result_data["model"]
     key_suffix = "_disabled" if disabled else ""
     samples = result_data["results"]
@@ -291,15 +329,34 @@ def _render_result_card(
         )
 
         if not disabled:
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if st.button(
-                    "Continue to Chat",
-                    key=f"continue_chat_{idx}",
-                    use_container_width=True,
-                ):
-                    _continue_to_chat(result_data, results_data, sample_idx=0)
-                    st.success("Chat created! Go to Chat tab.")
+            prompt_info = _build_prompt_info(results_data)
+
+            render_result_actions(
+                result_data=result_data,
+                prompt_info=prompt_info,
+                key_prefix=f"mg_result_{idx}",
+                on_update=lambda: st.rerun(scope="fragment"),
+            )
+
+            if st.button(
+                "Continue to Chat",
+                key=f"continue_chat_{idx}",
+                use_container_width=True,
+            ):
+                _continue_to_chat(result_data, results_data, sample_idx=0)
+                st.success("Chat created! Go to Chat tab.")
+
+
+def _build_prompt_info(results_data: dict) -> dict:
+    """Build prompt_info dict from results_data for result_actions."""
+    prompt_info = {"system_prompt": results_data.get("system_prompt", "")}
+    if "messages" in results_data:
+        prompt_info["messages"] = results_data["messages"]
+    else:
+        prompt_info["prompt"] = results_data.get("prompt", "")
+    if results_data.get("assistant_prefill"):
+        prompt_info["assistant_prefill"] = results_data["assistant_prefill"]
+    return prompt_info
 
 
 @st.fragment
@@ -316,34 +373,30 @@ def render_multi_gen_tab() -> None:
 
     _render_import_section()
 
-    text_tab, msg_tab = st.tabs(["Text", "Messages"])
+    text_tab, msg_tab = st.tabs(["📝 Text", "💬 Messages"])
+
+    text_gen_clicked = False
+    msg_gen_clicked = False
 
     with text_tab:
         _render_text_input_tab()
+        text_gen_clicked = _render_generation_controls("text", "Text")
 
     with msg_tab:
         _render_message_builder_tab()
-
-    active_tab = st.session_state.get("multi_gen_active_tab", "Text")
-
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        if st.button("Generate (Text)", type="primary", use_container_width=True):
-            st.session_state.multi_gen_active_tab = "Text"
-            st.session_state.multi_gen_trigger = True
-            st.rerun(scope="fragment")
-
-    with col2:
         messages = st.session_state.get("multi_gen_messages", [])
-        if st.button(
-            "Generate (Messages)",
-            type="primary",
-            use_container_width=True,
-            disabled=not messages,
-        ):
-            st.session_state.multi_gen_active_tab = "Messages"
-            st.session_state.multi_gen_trigger = True
-            st.rerun(scope="fragment")
+        msg_gen_clicked = _render_generation_controls(
+            "msg", "Messages", disabled=not messages
+        )
+
+    if text_gen_clicked:
+        st.session_state.multi_gen_active_tab = "Text"
+        st.session_state.multi_gen_trigger = True
+        st.rerun(scope="fragment")
+    elif msg_gen_clicked:
+        st.session_state.multi_gen_active_tab = "Messages"
+        st.session_state.multi_gen_trigger = True
+        st.rerun(scope="fragment")
 
     if st.session_state.get("multi_gen_trigger"):
         st.session_state.multi_gen_trigger = False
@@ -484,19 +537,55 @@ def render_multi_gen_tab() -> None:
     if st.session_state.get("multi_gen_results") is not None:
         st.markdown("---")
         results_data = st.session_state.multi_gen_results
+        results = results_data["results"]
+        inference = st.session_state.inference
 
-        with st.expander("Prompt", expanded=False):
-            if "messages" in results_data:
-                for msg in results_data["messages"]:
-                    st.markdown(f"**{msg['role']}:** {msg['content']}")
-            else:
-                st.code(
-                    results_data.get("prompt", ""), language="text", wrap_lines=True
+        with st.expander("Prompt (with special tokens)", expanded=False):
+            for result_data in results:
+                mm = result_data["model"]
+                tokenizer = inference.get_tokenizer(mm.config.base_model)
+                decoded = tokenizer.decode(
+                    result_data["prompt_tokens"], skip_special_tokens=False
                 )
+                st.markdown(f"**{mm.config.name}:**")
+                st.code(decoded, language=None)
+
+        col_actions = st.columns(2)
+        with col_actions[0]:
+            md_content = "# Multi-Generation Results\n\n"
+            if "messages" in results_data:
+                md_content += "**Messages:**\n"
+                for msg in results_data["messages"]:
+                    md_content += f"- {msg['role']}: {msg['content']}\n"
+                md_content += "\n"
+            else:
+                md_content += f"**Prompt:** {results_data.get('prompt', '')}\n\n"
+            if results_data.get("system_prompt"):
+                md_content += f"**System:** {results_data['system_prompt']}\n\n"
+            md_content += "---\n\n"
+            for result_data in results:
+                mm = result_data["model"]
+                md_content += f"## {mm.config.name}\n\n"
+                for idx, sample in enumerate(result_data["results"]):
+                    if len(result_data["results"]) > 1:
+                        md_content += f"### Sample {idx + 1}\n\n"
+                    md_content += f"{sample}\n\n"
+                md_content += "---\n\n"
+            st.download_button(
+                "Save all",
+                data=md_content,
+                file_name="multi_gen_results.md",
+                mime="text/markdown",
+                key="multi_gen_save_md",
+            )
+        with col_actions[1]:
+            if st.button("Clear results", key="multi_gen_clear"):
+                st.session_state.multi_gen_results = None
+                st.rerun(scope="fragment")
 
         st.markdown("## Generated Outputs")
         output_cols = st.columns(2)
-        for idx, result_data in enumerate(results_data["results"]):
+        for idx, result_data in enumerate(results):
             col_idx = idx % 2
             with output_cols[col_idx]:
                 _render_result_card(idx, result_data, results_data)

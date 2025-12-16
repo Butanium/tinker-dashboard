@@ -11,6 +11,7 @@ import streamlit as st
 
 from ..inference import SamplingParams
 from ..dashboard_state import GenerationLog, save_generation_log
+from .result_actions import render_sample_actions, render_result_actions
 
 
 def _get_sampling_params(n: int = 1) -> SamplingParams:
@@ -237,34 +238,8 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
         decoded_prompt = tokenizer.decode(prompt_tokens, skip_special_tokens=False)
         st.code(decoded_prompt, language=None)
 
-    col_actions = st.columns(4)
+    col_actions = st.columns(2)
     with col_actions[0]:
-        if st.button("Regenerate all", key=f"regen_all_{conv_id}"):
-            conv.pop("cached_samples", None)
-            conv.pop("cached_prompt_tokens", None)
-            _save_conversation(conv_id)
-            st.rerun(scope="fragment")
-    with col_actions[1]:
-        if st.button("Continue all", key=f"cont_all_{conv_id}"):
-            params = _get_sampling_params(n=1)
-            continued = []
-            for sample in samples:
-                cont_messages = []
-                if conv.get("system_prompt"):
-                    cont_messages.append({"role": "system", "content": conv["system_prompt"]})
-                cont_messages.extend(conv["history"])
-                cont_messages.append({"role": "assistant", "content": sample})
-                cont_tokens = tokenizer.apply_chat_template(
-                    cont_messages,
-                    add_special_tokens=True,
-                    continue_final_message=True,
-                )
-                result = inference.sample_from_tokens(mm, cont_tokens, params)
-                continued.append(sample + result["results"][0])
-            conv["cached_samples"] = continued
-            _save_conversation(conv_id)
-            st.rerun(scope="fragment")
-    with col_actions[2]:
         md_content = f"# Samples from {mm.config.name}\n\n"
         md_content += f"**Prompt:** {conv['history'][-1]['content']}\n\n"
         if prefill:
@@ -273,13 +248,13 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
         for idx, sample in enumerate(samples):
             md_content += f"## Sample {idx + 1}\n\n{sample}\n\n---\n\n"
         st.download_button(
-            "Save all (markdown)",
+            "Save all",
             data=md_content,
             file_name=f"samples_{conv_id}.md",
             mime="text/markdown",
             key=f"save_md_{conv_id}",
         )
-    with col_actions[3]:
+    with col_actions[1]:
         if st.button("Cancel", key=f"cancel_samples_{conv_id}"):
             conv["history"].pop()
             conv.pop("pending_samples", None)
@@ -289,12 +264,30 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
 
+    prompt_info = {
+        "system_prompt": conv.get("system_prompt", ""),
+        "messages": conv["history"][:-1],
+        "prompt": conv["history"][-1]["content"] if conv["history"] else "",
+    }
+
+    def on_sample_update():
+        _save_conversation(conv_id)
+        st.rerun(scope="fragment")
+
     cols = st.columns(2)
     for idx, sample in enumerate(samples):
         col_idx = idx % 2
         with cols[col_idx]:
             with st.expander(f"Sample {idx + 1}", expanded=True):
                 st.markdown(sample)
+                render_sample_actions(
+                    samples=samples,
+                    sample_idx=idx,
+                    mm=mm,
+                    prompt_info=prompt_info,
+                    key_prefix=f"chat_sample_{conv_id}_{idx}",
+                    on_update=on_sample_update,
+                )
                 if st.button(
                     f"Use sample {idx + 1}", key=f"use_sample_{conv_id}_{idx}"
                 ):
@@ -388,53 +381,31 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
     with st.expander("Prompts (with special tokens)", expanded=False):
         for result_data in results:
             tokenizer = inference.get_tokenizer(result_data["base_model"])
-            decoded = tokenizer.decode(result_data["prompt_tokens"], skip_special_tokens=False)
+            decoded = tokenizer.decode(
+                result_data["prompt_tokens"], skip_special_tokens=False
+            )
             st.markdown(f"**{result_data['name']}:**")
             st.code(decoded, language=None)
 
-    col_actions = st.columns(4)
+    col_actions = st.columns(2)
     with col_actions[0]:
-        if st.button("Regenerate all", key=f"regen_all_models_{conv_id}"):
-            conv.pop("cached_model_samples", None)
-            _save_conversation(conv_id)
-            st.rerun(scope="fragment")
-    with col_actions[1]:
-        if st.button("Continue all", key=f"cont_all_models_{conv_id}"):
-            params = _get_sampling_params(n=1)
-            for result_data in results:
-                mm = st.session_state.managed_models.get(result_data["model_id"])
-                assert mm is not None
-                tokenizer = inference.get_tokenizer(mm.config.base_model)
-                cont_messages = []
-                if conv.get("system_prompt"):
-                    cont_messages.append({"role": "system", "content": conv["system_prompt"]})
-                cont_messages.extend(conv["history"])
-                cont_messages.append({"role": "assistant", "content": result_data["response"]})
-                cont_tokens = tokenizer.apply_chat_template(
-                    cont_messages,
-                    add_special_tokens=True,
-                    continue_final_message=True,
-                )
-                result = inference.sample_from_tokens(mm, cont_tokens, params)
-                result_data["response"] = result_data["response"] + result["results"][0]
-            _save_conversation(conv_id)
-            st.rerun(scope="fragment")
-    with col_actions[2]:
         md_content = "# Multi-model samples\n\n"
         md_content += f"**Prompt:** {conv['history'][-1]['content']}\n\n"
         if prefill:
             md_content += f"**Prefill:** {prefill}\n\n"
         md_content += "---\n\n"
         for result_data in results:
-            md_content += f"## {result_data['name']}\n\n{result_data['response']}\n\n---\n\n"
+            md_content += (
+                f"## {result_data['name']}\n\n{result_data['response']}\n\n---\n\n"
+            )
         st.download_button(
-            "Save all (markdown)",
+            "Save all",
             data=md_content,
             file_name=f"multi_model_{conv_id}.md",
             mime="text/markdown",
             key=f"save_md_models_{conv_id}",
         )
-    with col_actions[3]:
+    with col_actions[1]:
         if st.button("Cancel", key=f"cancel_models_{conv_id}"):
             conv["history"].pop()
             conv.pop("pending_multi_model", None)
@@ -443,13 +414,43 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
 
+    prompt_info = {
+        "system_prompt": conv.get("system_prompt", ""),
+        "messages": conv["history"][:-1],
+        "prompt": conv["history"][-1]["content"] if conv["history"] else "",
+    }
+
+    def on_model_update():
+        _save_conversation(conv_id)
+        st.rerun(scope="fragment")
+
     cols = st.columns(2)
     for idx, result_data in enumerate(results):
         col_idx = idx % 2
+        mm = st.session_state.managed_models.get(result_data["model_id"])
         with cols[col_idx]:
             with st.expander(f"{result_data['name']}", expanded=idx == 0):
                 st.markdown(result_data["response"])
-                if st.button(f"Use this", key=f"use_model_{conv_id}_{idx}"):
+                adapted_result = {
+                    "model": mm,
+                    "results": [result_data["response"]],
+                    "prompt_tokens": result_data["prompt_tokens"],
+                }
+
+                def make_updater(rd, ar):
+                    def updater():
+                        rd["response"] = ar["results"][0]
+                        on_model_update()
+
+                    return updater
+
+                render_result_actions(
+                    result_data=adapted_result,
+                    prompt_info=prompt_info,
+                    key_prefix=f"chat_model_{conv_id}_{idx}",
+                    on_update=make_updater(result_data, adapted_result),
+                )
+                if st.button("Use this", key=f"use_model_{conv_id}_{idx}"):
                     conv["history"].append(
                         {
                             "role": "assistant",
@@ -623,6 +624,9 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
     if user_input:
         conv["history"].append({"role": "user", "content": user_input})
         gen_mode = conv.get("gen_mode", "single")
+
+        if prefill:
+            del st.session_state[prefill_key]
 
         if gen_mode == "multi-sample":
             conv["pending_samples"] = True
