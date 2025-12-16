@@ -323,7 +323,7 @@ def _tokenize_prompt(mp: ManagedPrompt, tokenizer) -> list[int]:
         assert all_messages, f"Prompt '{mp.name}' has no messages"
 
         last_role = mp.messages[-1]["role"] if mp.messages else "system"
-        add_gen = last_role == "user"
+        add_gen = last_role in ["user", "system"]
         continue_final = last_role == "assistant"
 
         return tokenizer.apply_chat_template(
@@ -466,11 +466,14 @@ def _render_results() -> None:
             col_idx = idx % len(cols)
             with cols[col_idx]:
                 with st.expander(mm.config.name, expanded=True):
-                    render_sample_cycler(
-                        samples=model_result["results"],
-                        component_id=f"mp_cycler_{mp.prompt_id}_{mm.model_id}",
-                        height=400,
-                    )
+                    if model_result and model_result["results"]:
+                        render_sample_cycler(
+                            samples=model_result["results"],
+                            component_id=f"mp_cycler_{mp.prompt_id}_{mm.model_id}",
+                            height=400,
+                        )
+                    else:
+                        st.info("No results")
 
         st.markdown("---")
 
