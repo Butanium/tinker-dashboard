@@ -7,8 +7,19 @@ Allows users to add, edit, and manage model configurations.
 from copy import deepcopy
 
 import streamlit as st
+import tinker
 
 from ..model_config import ModelConfig, ManagedModel
+
+
+@st.cache_data(ttl=300)
+def get_available_models() -> list[str]:
+    """Fetch available base models from tinker service."""
+    service_client = tinker.ServiceClient()
+    capabilities = service_client.get_server_capabilities()
+    return [item.model_name for item in capabilities.supported_models]
+
+
 from ..folder_manager_ui import FolderManagerUI, FolderManagerConfig
 from ..dashboard_state import (
     save_models_to_folder,
@@ -23,10 +34,13 @@ def _create_new_model(folder: str | None) -> ManagedModel:
     existing_names = {mm.config.name for mm in st.session_state.managed_models.values()}
     unique_name = get_unique_name("New Model", existing_names)
 
+    available_models = get_available_models()
+    default_base_model = available_models[0] if available_models else ""
+
     config = ModelConfig(
         name=unique_name,
-        tokenizer_id="meta-llama/Llama-3.3-70B-Instruct",
-        sampler_path="tinker://",
+        base_model=default_base_model,
+        sampler_path="",
         description="",
     )
     return ManagedModel.from_config(config, active=True, expanded=True, folder=folder)
@@ -72,25 +86,42 @@ def _render_model_editor(model_id: str, mm: ManagedModel) -> None:
                 mm.config.name = name
                 _save_models()
 
-            tokenizer_id = st.text_input(
-                "Tokenizer ID",
-                value=mm.config.tokenizer_id,
-                key=f"tokenizer_{model_id}",
-                help="HuggingFace model ID for tokenizer",
-            )
-            if tokenizer_id != mm.config.tokenizer_id:
-                mm.config.tokenizer_id = tokenizer_id
-                _save_models()
-
-        with col2:
             sampler_path = st.text_input(
                 "Sampler Path",
                 value=mm.config.sampler_path,
                 key=f"sampler_{model_id}",
-                help="tinker:// URI to sampler weights",
+                help="tinker:// URI to sampler weights (leave empty for base model)",
             )
             if sampler_path != mm.config.sampler_path:
                 mm.config.sampler_path = sampler_path
+                _save_models()
+
+        with col2:
+            available_models = get_available_models()
+            current_idx = (
+                available_models.index(mm.config.base_model)
+                if mm.config.base_model in available_models
+                else 0
+            )
+            base_model = st.selectbox(
+                "Base Model",
+                options=available_models,
+                index=current_idx,
+                key=f"base_model_{model_id}",
+                help="Base model (also used as tokenizer)",
+            )
+            if base_model != mm.config.base_model:
+                mm.config.base_model = base_model
+                _save_models()
+
+            active = st.checkbox(
+                "Active",
+                value=mm.active,
+                key=f"active_{model_id}",
+                help="Include this model in generation",
+            )
+            if active != mm.active:
+                mm.active = active
                 _save_models()
 
         description = st.text_area(
@@ -101,16 +132,6 @@ def _render_model_editor(model_id: str, mm: ManagedModel) -> None:
         )
         if description != mm.config.description:
             mm.config.description = description
-            _save_models()
-
-        active = st.checkbox(
-            "Active",
-            value=mm.active,
-            key=f"active_{model_id}",
-            help="Include this model in generation",
-        )
-        if active != mm.active:
-            mm.active = active
             _save_models()
 
 

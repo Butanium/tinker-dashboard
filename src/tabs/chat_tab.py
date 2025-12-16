@@ -123,7 +123,7 @@ def _generate_response(
     assert mm is not None, f"Model not found: {model_id}"
 
     inference = st.session_state.inference
-    tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+    tokenizer = inference.get_tokenizer(mm.config.base_model)
 
     messages = []
     if conv.get("system_prompt"):
@@ -178,7 +178,7 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
 
     if "cached_samples" not in conv:
         inference = st.session_state.inference
-        tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+        tokenizer = inference.get_tokenizer(mm.config.base_model)
 
         messages = []
         if conv.get("system_prompt"):
@@ -256,7 +256,7 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
         results = []
         with st.spinner(f"Generating from {len(active_models)} models..."):
             for mm in active_models:
-                tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+                tokenizer = inference.get_tokenizer(mm.config.base_model)
                 messages = []
                 if conv.get("system_prompt"):
                     messages.append(

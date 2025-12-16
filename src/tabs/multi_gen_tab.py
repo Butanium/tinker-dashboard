@@ -444,7 +444,7 @@ def render_multi_gen_tab() -> None:
             # Prepare all prompt tokens
             prompt_tokens_list = []
             for mm in active_models:
-                tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+                tokenizer = inference.get_tokenizer(mm.config.base_model)
                 prompt_tokens = tokenizer.apply_chat_template(
                     all_messages,
                     add_special_tokens=True,

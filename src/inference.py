@@ -49,18 +49,29 @@ class TinkerInference:
             self._tokenizers[tokenizer_id] = get_tokenizer(tokenizer_id)
         return self._tokenizers[tokenizer_id]
 
-    def _get_sampling_client(self, sampler_path: str):
-        """Get or create a cached sampling client."""
-        if sampler_path not in self._sampling_clients:
-            self._sampling_clients[sampler_path] = (
-                self._service_cl.create_sampling_client(sampler_path)
-            )
-        return self._sampling_clients[sampler_path]
+    def _get_sampling_client(self, sampler_path: str, base_model: str = ""):
+        """
+        Get or create a cached sampling client.
+
+        Args:
+            sampler_path: tinker:// URI to sampler weights (empty for base model)
+            base_model: Base model name (used when sampler_path is empty)
+        """
+        cache_key = sampler_path if sampler_path else f"base:{base_model}"
+        if cache_key not in self._sampling_clients:
+            if sampler_path:
+                self._sampling_clients[cache_key] = (
+                    self._service_cl.create_sampling_client(sampler_path)
+                )
+            else:
+                self._sampling_clients[cache_key] = (
+                    self._service_cl.create_sampling_client(base_model=base_model)
+                )
+        return self._sampling_clients[cache_key]
 
     def sample(
         self,
-        sampler_path: str,
-        tokenizer_id: str,
+        mm: ManagedModel,
         prompt_tokens: list[int],
         params: SamplingParams,
         skip_last_token: bool = False,
@@ -69,16 +80,18 @@ class TinkerInference:
         Sample from a model and decode with the specified tokenizer.
 
         Args:
-            sampler_path: tinker:// URI to the sampler
-            tokenizer_id: HuggingFace tokenizer ID for decoding
+            mm: ManagedModel instance
             prompt_tokens: Tokenized prompt
             params: Sampling parameters
+            skip_last_token: Whether to skip the last token in decoding
 
         Returns:
             List of decoded text samples
         """
-        sampling_cl = self._get_sampling_client(sampler_path)
-        tokenizer = self.get_tokenizer(tokenizer_id)
+        sampling_cl = self._get_sampling_client(
+            mm.config.sampler_path, mm.config.base_model
+        )
+        tokenizer = self.get_tokenizer(mm.config.base_model)
 
         prompt = types.ModelInput.from_ints(prompt_tokens)
         tinker_params = types.SamplingParams(
@@ -132,7 +145,7 @@ class TinkerInference:
         # Prepare all prompts and fire all requests
         future_to_model = {}
         for idx, mm in enumerate(models):
-            tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
+            tokenizer = self.get_tokenizer(mm.config.base_model)
 
             messages = []
             if system_prompt:
@@ -153,7 +166,9 @@ class TinkerInference:
                     add_generation_prompt=True,
                 )
 
-            sampling_cl = self._get_sampling_client(mm.config.sampler_path)
+            sampling_cl = self._get_sampling_client(
+                mm.config.sampler_path, mm.config.base_model
+            )
             prompt = types.ModelInput.from_ints(prompt_tokens)
             tinker_params = types.SamplingParams(
                 max_tokens=params.max_tokens,
@@ -173,7 +188,7 @@ class TinkerInference:
             idx, mm, prompt_tokens = future_to_model[future]
             result = future.result()
 
-            tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
+            tokenizer = self.get_tokenizer(mm.config.base_model)
             samples = [
                 tokenizer.decode(
                     seq.tokens, skip_special_tokens=params.skip_special_tokens
@@ -207,8 +222,7 @@ class TinkerInference:
             dict with {model, results, prompt_tokens}
         """
         results = self.sample(
-            sampler_path=mm.config.sampler_path,
-            tokenizer_id=mm.config.tokenizer_id,
+            mm=mm,
             prompt_tokens=prompt_tokens,
             params=params,
             skip_last_token=skip_last_token,
@@ -242,7 +256,9 @@ class TinkerInference:
 
         future_to_model = {}
         for idx, (mm, prompt_tokens) in enumerate(zip(models, prompt_tokens_list)):
-            sampling_cl = self._get_sampling_client(mm.config.sampler_path)
+            sampling_cl = self._get_sampling_client(
+                mm.config.sampler_path, mm.config.base_model
+            )
             prompt = types.ModelInput.from_ints(prompt_tokens)
             tinker_params = types.SamplingParams(
                 max_tokens=params.max_tokens,
@@ -261,7 +277,7 @@ class TinkerInference:
             idx, mm, prompt_tokens = future_to_model[future]
             result = future.result()
 
-            tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
+            tokenizer = self.get_tokenizer(mm.config.base_model)
             samples = [
                 tokenizer.decode(
                     seq.tokens, skip_special_tokens=params.skip_special_tokens

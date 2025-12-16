@@ -374,10 +374,12 @@ def _run_multi_prompt_generation(
     future_to_info = {}
     for prompt_idx, mp in enumerate(active_prompts):
         for model_idx, mm in enumerate(selected_models):
-            tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+            tokenizer = inference.get_tokenizer(mm.config.base_model)
             prompt_tokens = _tokenize_prompt(mp, tokenizer)
 
-            sampling_cl = inference._get_sampling_client(mm.config.sampler_path)
+            sampling_cl = inference._get_sampling_client(
+                mm.config.sampler_path, mm.config.base_model
+            )
             prompt = types.ModelInput.from_ints(prompt_tokens)
             tinker_params = types.SamplingParams(
                 max_tokens=params.max_tokens,
@@ -400,7 +402,7 @@ def _run_multi_prompt_generation(
         prompt_idx, model_idx, mp, mm, prompt_tokens = future_to_info[future]
         result = future.result()
 
-        tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+        tokenizer = inference.get_tokenizer(mm.config.base_model)
         samples = [
             tokenizer.decode(seq.tokens, skip_special_tokens=params.skip_special_tokens)
             for seq in result.sequences

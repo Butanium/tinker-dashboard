@@ -11,15 +11,15 @@ class ModelConfig:
     """Configuration for a model endpoint."""
 
     name: str
-    tokenizer_id: str  # HuggingFace tokenizer path
-    sampler_path: str  # tinker:// URI to sampler weights
+    base_model: str  # Base model name (also used as tokenizer)
+    sampler_path: str = ""  # tinker:// URI to sampler weights (empty for base model)
     description: str = ""
 
     def to_dict(self) -> dict:
         """Serialize to dict for YAML storage."""
         return {
             "name": self.name,
-            "tokenizer_id": self.tokenizer_id,
+            "base_model": self.base_model,
             "sampler_path": self.sampler_path,
             "description": self.description,
         }
@@ -27,10 +27,12 @@ class ModelConfig:
     @classmethod
     def from_dict(cls, data: dict) -> "ModelConfig":
         """Deserialize from dict."""
+        # Support legacy tokenizer_id field
+        base_model = data.get("base_model") or data.get("tokenizer_id", "")
         return cls(
             name=data["name"],
-            tokenizer_id=data["tokenizer_id"],
-            sampler_path=data["sampler_path"],
+            base_model=base_model,
+            sampler_path=data.get("sampler_path", ""),
             description=data.get("description", ""),
         )
 
