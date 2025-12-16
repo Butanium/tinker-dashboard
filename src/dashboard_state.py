@@ -36,9 +36,11 @@ class ManagedPrompt:
     """A managed prompt for batch generation."""
 
     name: str = ""
+    prompt_mode: str = "text"  # "text" | "messages"
     content: str = ""
     messages: list[dict] = field(default_factory=list)
-    use_chat_format: bool = False
+    system_prompt: str = ""
+    template_mode: str = "Apply chat template"
     folder: str | None = None
     prompt_id: str = field(default_factory=lambda: str(uuid4()))
     active: bool = True
@@ -48,16 +50,23 @@ class ManagedPrompt:
         """Get name or truncated content."""
         if self.name:
             return self.name
-        text = self.content or (self.messages[0]["content"] if self.messages else "")
-        return text[:40] + "..." if len(text) > 40 else text
+        if self.prompt_mode == "messages":
+            if self.messages:
+                first_msg = self.messages[0]["content"]
+                return f"[{len(self.messages)} msgs] {first_msg[:30]}..."
+            return "[Empty messages]"
+        text = self.content
+        return text[:40] + "..." if len(text) > 40 else text or "[Empty]"
 
     def to_dict(self) -> dict:
         """Serialize to dict."""
         return {
             "name": self.name,
+            "prompt_mode": self.prompt_mode,
             "content": self.content,
             "messages": self.messages,
-            "use_chat_format": self.use_chat_format,
+            "system_prompt": self.system_prompt,
+            "template_mode": self.template_mode,
             "folder": self.folder,
             "prompt_id": self.prompt_id,
             "active": self.active,
@@ -69,9 +78,11 @@ class ManagedPrompt:
         """Deserialize from dict."""
         return cls(
             name=data.get("name", ""),
+            prompt_mode=data.get("prompt_mode", "text"),
             content=data.get("content", ""),
             messages=data.get("messages", []),
-            use_chat_format=data.get("use_chat_format", False),
+            system_prompt=data.get("system_prompt", ""),
+            template_mode=data.get("template_mode", "Apply chat template"),
             folder=data.get("folder"),
             prompt_id=data.get("prompt_id", str(uuid4())),
             active=data.get("active", True),
@@ -126,11 +137,19 @@ def save_models_to_folder(
 
     folder_models = {k: v for k, v in models.items() if v.folder == folder}
 
+    expected_files = set()
     for model_id, mm in folder_models.items():
         filename = sanitize_name(mm.config.name) + ".yaml"
+        expected_files.add(filename)
         filepath = folder_path / filename
         with open(filepath, "w") as f:
             yaml.safe_dump(mm.config.to_dict(), f)
+
+    for filepath in folder_path.glob("*.yaml"):
+        if filepath.name.startswith("_"):
+            continue
+        if filepath.name not in expected_files:
+            filepath.unlink()
 
     ui_state = {}
     for mm in folder_models.values():
@@ -201,9 +220,11 @@ def save_prompts_to_folder(
         filepath = folder_path / filename
         data = {
             "name": mp.name,
+            "prompt_mode": mp.prompt_mode,
             "content": mp.content,
             "messages": mp.messages,
-            "use_chat_format": mp.use_chat_format,
+            "system_prompt": mp.system_prompt,
+            "template_mode": mp.template_mode,
         }
         with open(filepath, "w") as f:
             yaml.safe_dump(data, f)
@@ -239,9 +260,11 @@ def load_prompts_from_folder(
 
         mp = ManagedPrompt(
             name=name,
+            prompt_mode=data.get("prompt_mode", "text"),
             content=data.get("content", ""),
             messages=data.get("messages", []),
-            use_chat_format=data.get("use_chat_format", False),
+            system_prompt=data.get("system_prompt", ""),
+            template_mode=data.get("template_mode", "Apply chat template"),
             folder=folder,
             active=state.get("active", True),
             expanded=state.get("expanded", False),
@@ -287,3 +310,115 @@ def load_loaded_folders(
     prompt_folders = set(data.get("prompt_folders", []))
 
     return model_folders, prompt_folders
+
+
+# Conversation persistence
+
+def save_conversation(conv_dir: Path, conv_id: str, conv: dict) -> None:
+    """Save a single conversation to disk."""
+    conv_dir.mkdir(parents=True, exist_ok=True)
+    filepath = conv_dir / f"{conv_id}.yaml"
+    with open(filepath, "w") as f:
+        yaml.safe_dump(conv, f)
+
+
+def load_conversations(conv_dir: Path) -> dict[str, dict]:
+    """Load all conversations from disk."""
+    if not conv_dir.exists():
+        return {}
+
+    result = {}
+    for filepath in conv_dir.glob("*.yaml"):
+        conv_id = filepath.stem
+        with open(filepath) as f:
+            result[conv_id] = yaml.safe_load(f) or {}
+    return result
+
+
+def delete_conversation(conv_dir: Path, conv_id: str) -> None:
+    """Delete a conversation file."""
+    filepath = conv_dir / f"{conv_id}.yaml"
+    if filepath.exists():
+        filepath.unlink()
+
+
+# Generation logging
+
+@dataclass
+class GenerationLog:
+    """Log entry for a generation."""
+
+    timestamp: str
+    generation_type: str  # "multigen" | "chat" | "multi_prompt"
+    prompt_text: str
+    prompt_tokens: list[int]
+    model_name: str
+    sampler_path: str
+    sampling_params: dict
+    outputs: list[str]
+    system_prompt: str = ""
+    messages: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Serialize to dict."""
+        return {
+            "timestamp": self.timestamp,
+            "generation_type": self.generation_type,
+            "prompt_text": self.prompt_text,
+            "prompt_tokens": self.prompt_tokens,
+            "model_name": self.model_name,
+            "sampler_path": self.sampler_path,
+            "sampling_params": self.sampling_params,
+            "outputs": self.outputs,
+            "system_prompt": self.system_prompt,
+            "messages": self.messages,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GenerationLog":
+        """Deserialize from dict."""
+        return cls(
+            timestamp=data["timestamp"],
+            generation_type=data["generation_type"],
+            prompt_text=data["prompt_text"],
+            prompt_tokens=data.get("prompt_tokens", []),
+            model_name=data["model_name"],
+            sampler_path=data.get("sampler_path", ""),
+            sampling_params=data.get("sampling_params", {}),
+            outputs=data["outputs"],
+            system_prompt=data.get("system_prompt", ""),
+            messages=data.get("messages", []),
+        )
+
+
+def save_generation_log(logs_dir: Path, log: GenerationLog) -> Path:
+    """
+    Save a generation log to disk.
+
+    Returns the path to the saved log file.
+    """
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_model = sanitize_name(log.model_name)
+    timestamp = log.timestamp.replace(":", "-").replace(" ", "_")
+    filename = f"{timestamp}_{safe_model}.yaml"
+    filepath = logs_dir / filename
+
+    with open(filepath, "w") as f:
+        yaml.safe_dump(log.to_dict(), f)
+
+    return filepath
+
+
+def load_generation_logs(logs_dir: Path, limit: int = 100) -> list[GenerationLog]:
+    """Load recent generation logs from disk."""
+    if not logs_dir.exists():
+        return []
+
+    files = sorted(logs_dir.glob("*.yaml"), reverse=True)[:limit]
+    logs = []
+    for filepath in files:
+        with open(filepath) as f:
+            data = yaml.safe_load(f)
+        logs.append(GenerationLog.from_dict(data))
+    return logs

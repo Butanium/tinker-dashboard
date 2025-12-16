@@ -13,6 +13,7 @@ from .dashboard_state import (
     load_models_from_folder,
     load_prompts_from_folder,
     load_loaded_folders,
+    load_conversations,
 )
 from .tabs import (
     render_models_tab,
@@ -79,9 +80,15 @@ class TinkerDashboard:
                 st.session_state.managed_prompts.update(loaded)
 
         if "conversations" not in st.session_state:
-            st.session_state.conversations = {}
+            conv_dir = self.cache_dir / "conversations"
+            st.session_state.conversations = load_conversations(conv_dir)
         if "conversation_counter" not in st.session_state:
-            st.session_state.conversation_counter = 0
+            existing_ids = [
+                int(cid.split("_")[1])
+                for cid in st.session_state.conversations.keys()
+                if cid.startswith("conv_") and cid.split("_")[1].isdigit()
+            ]
+            st.session_state.conversation_counter = max(existing_ids, default=0) + 1
 
         if "sampling_params" not in st.session_state:
             st.session_state.sampling_params = {
@@ -166,7 +173,7 @@ class TinkerDashboard:
                 1 for mm in st.session_state.managed_models.values() if mm.active
             )
             total_count = len(st.session_state.managed_models)
-            st.info(f"**{active_count}/{total_count}** models active")
+
 
     def display(self) -> None:
         """Main entry point for the dashboard."""

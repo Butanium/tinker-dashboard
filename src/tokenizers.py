@@ -1,15 +1,8 @@
-"""
-Placeholder tokenizer module.
-
-Will be replaced by character.utils.tokenizers when integrated into character repo.
-"""
-
-from functools import lru_cache
-
+from functools import cache
 from transformers import AutoTokenizer
 
 
-@lru_cache(maxsize=8)
+@cache
 def get_tokenizer(model_id: str) -> AutoTokenizer:
     """
     Get a HuggingFace tokenizer for the given model.

@@ -35,7 +35,12 @@ def _get_sampling_params() -> SamplingParams:
 
 def _create_new_prompt(folder: str | None) -> ManagedPrompt:
     """Create a new prompt."""
-    return ManagedPrompt(active=True, expanded=True, folder=folder)
+    return ManagedPrompt(
+        prompt_mode="text",
+        active=True,
+        expanded=True,
+        folder=folder,
+    )
 
 
 def _save_prompts() -> None:
@@ -60,6 +65,99 @@ def _save_loaded_folders() -> None:
     )
 
 
+def _render_text_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
+    """Render text prompt editor."""
+    template_mode = st.selectbox(
+        "Template Mode",
+        options=["Apply chat template", "No template", "Apply loom template"],
+        index=["Apply chat template", "No template", "Apply loom template"].index(mp.template_mode)
+        if mp.template_mode in ["Apply chat template", "No template", "Apply loom template"]
+        else 0,
+        key=f"prompt_template_{prompt_id}",
+    )
+    if template_mode != mp.template_mode:
+        mp.template_mode = template_mode
+        _save_prompts()
+
+    if template_mode == "Apply chat template":
+        system_prompt = st.text_area(
+            "System Prompt (optional)",
+            value=mp.system_prompt,
+            key=f"prompt_sys_{prompt_id}",
+            height=68,
+        )
+        if system_prompt != mp.system_prompt:
+            mp.system_prompt = system_prompt
+            _save_prompts()
+
+    content = st.text_area(
+        "Prompt",
+        value=mp.content,
+        key=f"prompt_content_{prompt_id}",
+        height=150,
+    )
+    if content != mp.content:
+        mp.content = content
+        _save_prompts()
+
+
+def _render_messages_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
+    """Render messages (multi-turn) prompt editor."""
+    system_prompt = st.text_input(
+        "System Prompt",
+        value=mp.system_prompt,
+        key=f"prompt_sys_msg_{prompt_id}",
+        placeholder="Optional system prompt...",
+    )
+    if system_prompt != mp.system_prompt:
+        mp.system_prompt = system_prompt
+        _save_prompts()
+
+    for i, msg in enumerate(mp.messages):
+        col1, col2, col3 = st.columns([1, 8, 1])
+        with col1:
+            role = st.selectbox(
+                "Role",
+                options=["user", "assistant"],
+                index=0 if msg["role"] == "user" else 1,
+                key=f"prompt_msg_role_{prompt_id}_{i}",
+                label_visibility="collapsed",
+            )
+            if role != msg["role"]:
+                mp.messages[i]["role"] = role
+                _save_prompts()
+
+        with col2:
+            content = st.text_area(
+                "Content",
+                value=msg["content"],
+                key=f"prompt_msg_content_{prompt_id}_{i}",
+                height=80,
+                label_visibility="collapsed",
+            )
+            if content != msg["content"]:
+                mp.messages[i]["content"] = content
+                _save_prompts()
+
+        with col3:
+            if st.button("X", key=f"prompt_msg_del_{prompt_id}_{i}"):
+                mp.messages.pop(i)
+                _save_prompts()
+                st.rerun(scope="fragment")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("+ User", key=f"prompt_add_user_{prompt_id}", use_container_width=True):
+            mp.messages.append({"role": "user", "content": ""})
+            _save_prompts()
+            st.rerun(scope="fragment")
+    with col2:
+        if st.button("+ Assistant", key=f"prompt_add_asst_{prompt_id}", use_container_width=True):
+            mp.messages.append({"role": "assistant", "content": ""})
+            _save_prompts()
+            st.rerun(scope="fragment")
+
+
 def _render_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
     """Render the editor for a single prompt."""
     icon = "+" if mp.active else "-"
@@ -76,15 +174,20 @@ def _render_prompt_editor(prompt_id: str, mp: ManagedPrompt) -> None:
             mp.name = name
             _save_prompts()
 
-        content = st.text_area(
-            "Prompt",
-            value=mp.content,
-            key=f"prompt_content_{prompt_id}",
-            height=150,
+        prompt_mode = st.selectbox(
+            "Prompt Mode",
+            options=["text", "messages"],
+            index=0 if mp.prompt_mode == "text" else 1,
+            key=f"prompt_mode_{prompt_id}",
         )
-        if content != mp.content:
-            mp.content = content
+        if prompt_mode != mp.prompt_mode:
+            mp.prompt_mode = prompt_mode
             _save_prompts()
+
+        if mp.prompt_mode == "text":
+            _render_text_prompt_editor(prompt_id, mp)
+        else:
+            _render_messages_prompt_editor(prompt_id, mp)
 
         active = st.checkbox(
             "Active",
@@ -102,15 +205,18 @@ def _render_prompt_actions(prompt_id: str, mp: ManagedPrompt) -> None:
     with col1:
         if st.button("Dup", key=f"dup_prompt_{prompt_id}", help="Duplicate"):
             new_mp = deepcopy(mp)
-            new_mp.prompt_id = None  # Will be regenerated
+            new_mp.name = get_unique_name(
+                f"{mp.name or 'Prompt'} copy",
+                {p.name for p in st.session_state.managed_prompts.values()},
+            )
+            new_mp.prompt_id = None
             new_mp = ManagedPrompt(
-                name=get_unique_name(
-                    f"{mp.name or 'Prompt'} copy",
-                    {p.name for p in st.session_state.managed_prompts.values()},
-                ),
+                name=new_mp.name,
+                prompt_mode=mp.prompt_mode,
                 content=mp.content,
-                messages=mp.messages,
-                use_chat_format=mp.use_chat_format,
+                messages=list(mp.messages),
+                system_prompt=mp.system_prompt,
+                template_mode=mp.template_mode,
                 folder=mp.folder,
                 active=mp.active,
                 expanded=True,
@@ -124,6 +230,58 @@ def _render_prompt_actions(prompt_id: str, mp: ManagedPrompt) -> None:
             del st.session_state.managed_prompts[prompt_id]
             _save_prompts()
             st.rerun(scope="fragment")
+
+
+def _tokenize_prompt(mp: ManagedPrompt, tokenizer) -> list[int]:
+    """Tokenize a prompt based on its mode."""
+    if mp.prompt_mode == "text":
+        if mp.template_mode == "No template":
+            return tokenizer.encode(mp.content, add_special_tokens=True)
+        elif mp.template_mode == "Apply chat template":
+            messages = []
+            if mp.system_prompt:
+                messages.append({"role": "system", "content": mp.system_prompt})
+            messages.append({"role": "user", "content": mp.content})
+            return tokenizer.apply_chat_template(
+                messages,
+                add_special_tokens=True,
+                add_generation_prompt=True,
+            )
+        elif mp.template_mode == "Apply loom template":
+            return tokenizer.apply_chat_template(
+                [
+                    {
+                        "role": "system",
+                        "content": "The assistant is in CLI simulation mode.",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"<cmd>cat untitled.txt</cmd>",
+                    },
+                    {"role": "assistant", "content": mp.content},
+                ],
+                continue_final_message=True,
+            )
+    else:
+        all_messages = []
+        if mp.system_prompt:
+            all_messages.append({"role": "system", "content": mp.system_prompt})
+        all_messages.extend(mp.messages)
+
+        if mp.messages:
+            last_role = mp.messages[-1]["role"]
+            add_gen = last_role == "user"
+            continue_final = last_role == "assistant"
+        else:
+            add_gen = True
+            continue_final = False
+
+        return tokenizer.apply_chat_template(
+            all_messages,
+            add_special_tokens=True,
+            add_generation_prompt=add_gen,
+            continue_final_message=continue_final,
+        )
 
 
 def _run_multi_prompt_generation(
@@ -145,12 +303,7 @@ def _run_multi_prompt_generation(
 
         for mm in selected_models:
             tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
-            messages = [{"role": "user", "content": mp.content}]
-            prompt_tokens = tokenizer.apply_chat_template(
-                messages,
-                add_special_tokens=True,
-                add_generation_prompt=True,
-            )
+            prompt_tokens = _tokenize_prompt(mp, tokenizer)
 
             result = inference.sample_from_tokens(mm, prompt_tokens, params)
             prompt_results["models"].append(result)
@@ -176,7 +329,11 @@ def _render_results() -> None:
         st.markdown(f"### {mp.get_display_name()}")
 
         with st.expander("Prompt", expanded=False):
-            st.code(mp.content, language="text", wrap_lines=True)
+            if mp.prompt_mode == "messages":
+                for msg in mp.messages:
+                    st.markdown(f"**{msg['role']}:** {msg['content']}")
+            else:
+                st.code(mp.content, language="text", wrap_lines=True)
 
         cols = st.columns(min(len(prompt_result["models"]), 3))
         for idx, model_result in enumerate(prompt_result["models"]):
