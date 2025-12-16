@@ -146,7 +146,9 @@ def _generate_response(
     )
 
     params = _get_sampling_params(n=1)
-    result = inference.sample_from_tokens(mm, prompt_tokens, params)
+    result = inference.sample_from_tokens(
+        mm, prompt_tokens, params, skip_last_token=True
+    )
     response = result["results"][0]
 
     _log_chat_generation(
@@ -217,7 +219,13 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
                 if st.button(
                     f"Use sample {idx + 1}", key=f"use_sample_{conv_id}_{idx}"
                 ):
-                    conv["history"].append({"role": "assistant", "content": sample})
+                    conv["history"].append(
+                        {
+                            "role": "assistant",
+                            "content": sample,
+                            "model_id": mm.model_id,
+                        }
+                    )
                     conv.pop("pending_samples", None)
                     conv.pop("cached_samples", None)
                     _save_conversation(conv_id)
@@ -293,7 +301,11 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                 st.markdown(result_data["response"])
                 if st.button(f"Use this", key=f"use_model_{conv_id}_{idx}"):
                     conv["history"].append(
-                        {"role": "assistant", "content": result_data["response"]}
+                        {
+                            "role": "assistant",
+                            "content": result_data["response"],
+                            "model_id": result_data["model_id"],
+                        }
                     )
                     conv["model_id"] = result_data["model_id"]
                     conv.pop("pending_multi_model", None)
@@ -336,7 +348,9 @@ def _render_message_actions(
             conv["history"] = conv["history"][:idx]
             with st.spinner("Regenerating..."):
                 response = _generate_response(conv_id, conv)
-            conv["history"].append({"role": "assistant", "content": response})
+            conv["history"].append(
+                {"role": "assistant", "content": response, "model_id": conv["model_id"]}
+            )
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
 
@@ -349,9 +363,6 @@ def _render_message_actions(
 
 def _render_chat_messages(conv_id: str, conv: dict[str, Any]) -> None:
     """Render the message history for a conversation with action buttons."""
-    model_id = conv["model_id"]
-    mm = st.session_state.managed_models.get(model_id)
-    model_name = mm.config.name if mm else "Unknown"
     editing_idx = conv.get("editing_idx")
 
     for i, msg in enumerate(conv["history"]):
@@ -382,6 +393,9 @@ def _render_chat_messages(conv_id: str, conv: dict[str, Any]) -> None:
                         st.rerun(scope="fragment")
             else:
                 if role == "assistant":
+                    msg_model_id = msg.get("model_id", conv["model_id"])
+                    mm = st.session_state.managed_models.get(msg_model_id)
+                    model_name = mm.config.name if mm else "Unknown"
                     st.markdown(f"**[{model_name}]** {content}")
                 else:
                     st.markdown(content)
@@ -469,7 +483,9 @@ def _render_conversation(conv_id: str, conv: dict[str, Any]) -> None:
         else:
             with st.spinner("Generating..."):
                 response = _generate_response(conv_id, conv)
-            conv["history"].append({"role": "assistant", "content": response})
+            conv["history"].append(
+                {"role": "assistant", "content": response, "model_id": conv["model_id"]}
+            )
             _save_conversation(conv_id)
             st.rerun(scope="fragment")
 

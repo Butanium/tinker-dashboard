@@ -2,6 +2,7 @@
 Tinker inference wrapper for the dashboard.
 """
 
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,6 +63,7 @@ class TinkerInference:
         tokenizer_id: str,
         prompt_tokens: list[int],
         params: SamplingParams,
+        skip_last_token: bool = False,
     ) -> list[str]:
         """
         Sample from a model and decode with the specified tokenizer.
@@ -94,8 +96,11 @@ class TinkerInference:
 
         samples = []
         for seq in result.sequences:
+            tokens = seq.tokens
+            if skip_last_token:
+                tokens = tokens[:-1]
             text = tokenizer.decode(
-                seq.tokens, skip_special_tokens=params.skip_special_tokens
+                tokens, skip_special_tokens=params.skip_special_tokens
             )
             samples.append(text)
 
@@ -110,9 +115,9 @@ class TinkerInference:
         assistant_prefill: str = "",
     ):
         """
-        Sample from multiple models with the same prompt.
+        Sample from multiple models concurrently.
 
-        Yields results as they complete for progressive rendering.
+        Fires all requests upfront, yields results as they complete (not in submission order).
 
         Args:
             models: List of ManagedModel instances
@@ -122,9 +127,11 @@ class TinkerInference:
             assistant_prefill: Optional assistant prefill
 
         Yields:
-            dict with {model, results, prompt_tokens}
+            dict with {model_idx, model, results, prompt_tokens}
         """
-        for mm in models:
+        # Prepare all prompts and fire all requests
+        future_to_model = {}
+        for idx, mm in enumerate(models):
             tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
 
             messages = []
@@ -146,16 +153,38 @@ class TinkerInference:
                     add_generation_prompt=True,
                 )
 
-            results = self.sample(
-                sampler_path=mm.config.sampler_path,
-                tokenizer_id=mm.config.tokenizer_id,
-                prompt_tokens=prompt_tokens,
-                params=params,
+            sampling_cl = self._get_sampling_client(mm.config.sampler_path)
+            prompt = types.ModelInput.from_ints(prompt_tokens)
+            tinker_params = types.SamplingParams(
+                max_tokens=params.max_tokens,
+                temperature=params.temperature,
+                top_p=params.top_p,
             )
 
+            future = sampling_cl.sample(
+                prompt=prompt,
+                sampling_params=tinker_params,
+                num_samples=params.n,
+            )
+            future_to_model[future] = (idx, mm, prompt_tokens)
+
+        # Yield results as they complete
+        for future in as_completed(future_to_model):
+            idx, mm, prompt_tokens = future_to_model[future]
+            result = future.result()
+
+            tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
+            samples = [
+                tokenizer.decode(
+                    seq.tokens, skip_special_tokens=params.skip_special_tokens
+                )
+                for seq in result.sequences
+            ]
+
             yield {
+                "model_idx": idx,
                 "model": mm,
-                "results": results,
+                "results": samples,
                 "prompt_tokens": prompt_tokens,
             }
 
@@ -164,6 +193,7 @@ class TinkerInference:
         mm: ManagedModel,
         prompt_tokens: list[int],
         params: SamplingParams,
+        skip_last_token: bool = False,
     ) -> dict:
         """
         Sample from a single model with pre-tokenized prompt.
@@ -181,9 +211,67 @@ class TinkerInference:
             tokenizer_id=mm.config.tokenizer_id,
             prompt_tokens=prompt_tokens,
             params=params,
+            skip_last_token=skip_last_token,
         )
         return {
             "model": mm,
             "results": results,
             "prompt_tokens": prompt_tokens,
         }
+
+    def multi_model_sample_from_tokens(
+        self,
+        models: list[ManagedModel],
+        prompt_tokens_list: list[list[int]],
+        params: SamplingParams,
+    ):
+        """
+        Sample from multiple models concurrently with pre-tokenized prompts.
+
+        Fires all requests upfront, yields results as they complete (not in submission order).
+
+        Args:
+            models: List of ManagedModel instances
+            prompt_tokens_list: List of tokenized prompts, one per model
+            params: Sampling parameters
+
+        Yields:
+            dict with {model_idx, model, results, prompt_tokens}
+        """
+        assert len(models) == len(prompt_tokens_list)
+
+        future_to_model = {}
+        for idx, (mm, prompt_tokens) in enumerate(zip(models, prompt_tokens_list)):
+            sampling_cl = self._get_sampling_client(mm.config.sampler_path)
+            prompt = types.ModelInput.from_ints(prompt_tokens)
+            tinker_params = types.SamplingParams(
+                max_tokens=params.max_tokens,
+                temperature=params.temperature,
+                top_p=params.top_p,
+            )
+
+            future = sampling_cl.sample(
+                prompt=prompt,
+                sampling_params=tinker_params,
+                num_samples=params.n,
+            )
+            future_to_model[future] = (idx, mm, prompt_tokens)
+
+        for future in as_completed(future_to_model):
+            idx, mm, prompt_tokens = future_to_model[future]
+            result = future.result()
+
+            tokenizer = self.get_tokenizer(mm.config.tokenizer_id)
+            samples = [
+                tokenizer.decode(
+                    seq.tokens, skip_special_tokens=params.skip_special_tokens
+                )
+                for seq in result.sequences
+            ]
+
+            yield {
+                "model_idx": idx,
+                "model": mm,
+                "results": samples,
+                "prompt_tokens": prompt_tokens,
+            }

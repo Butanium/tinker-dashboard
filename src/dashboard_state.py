@@ -210,12 +210,24 @@ def unload_folder_models(
 def save_prompts_to_folder(
     prompts: dict[str, ManagedPrompt], base_dir: Path, folder: str | None
 ) -> None:
-    """Save prompts to a folder."""
+    """Save prompts to a folder, removing deleted ones from disk."""
     folder_path = _get_folder_path(base_dir, folder)
     folder_path.mkdir(parents=True, exist_ok=True)
 
     folder_prompts = {k: v for k, v in prompts.items() if v.folder == folder}
 
+    # Build set of filenames that should exist
+    expected_files = {"_ui_state.yaml"}
+    for mp in folder_prompts.values():
+        name = mp.name or f"prompt_{mp.prompt_id[:8]}"
+        expected_files.add(sanitize_name(name) + ".yaml")
+
+    # Delete yaml files that shouldn't exist (deleted prompts)
+    for filepath in folder_path.glob("*.yaml"):
+        if filepath.name not in expected_files:
+            filepath.unlink()
+
+    # Save current prompts
     for prompt_id, mp in folder_prompts.items():
         name = mp.name or f"prompt_{prompt_id[:8]}"
         filename = sanitize_name(name) + ".yaml"

@@ -287,7 +287,7 @@ def _render_result_card(
         render_sample_cycler(
             samples=samples,
             component_id=f"cycler_{idx}{key_suffix}",
-            height=300,
+            height=400,
         )
 
         if not disabled:
@@ -377,16 +377,15 @@ def render_multi_gen_tab() -> None:
                     placeholders.append(placeholder)
 
             results = []
-            for idx, result_data in enumerate(
-                inference.multi_model_sample(
-                    models=active_models,
-                    prompt_text=prompt,
-                    params=params,
-                    system_prompt=system_prompt,
-                    assistant_prefill=assistant_prefill,
-                )
+            for result_data in inference.multi_model_sample(
+                models=active_models,
+                prompt_text=prompt,
+                params=params,
+                system_prompt=system_prompt,
+                assistant_prefill=assistant_prefill,
             ):
                 results.append(result_data)
+                model_idx = result_data["model_idx"]
                 _log_generation(
                     prompt_text=prompt,
                     prompt_tokens=result_data["prompt_tokens"],
@@ -395,8 +394,8 @@ def render_multi_gen_tab() -> None:
                     params=params,
                     system_prompt=system_prompt,
                 )
-                with placeholders[idx].container():
-                    _render_result_card(idx, result_data, {}, disabled=True)
+                with placeholders[model_idx].container():
+                    _render_result_card(model_idx, result_data, {}, disabled=True)
 
             st.session_state.multi_gen_results = {
                 "prompt": prompt,
@@ -426,49 +425,54 @@ def render_multi_gen_tab() -> None:
                             st.info("Waiting for generation...")
                     placeholders.append(placeholder)
 
-            results = []
-            for idx, mm in enumerate(active_models):
+            all_messages = []
+            if system_prompt:
+                all_messages.append({"role": "system", "content": system_prompt})
+            all_messages.extend(messages)
+
+            if template_override == "Auto (based on last message)":
+                last_role = messages[-1]["role"] if messages else "user"
+                add_gen = last_role == "user"
+                continue_final = last_role == "assistant"
+            elif template_override == "Force generation prompt":
+                add_gen = True
+                continue_final = False
+            else:
+                add_gen = False
+                continue_final = True
+
+            # Prepare all prompt tokens
+            prompt_tokens_list = []
+            for mm in active_models:
                 tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
-
-                all_messages = []
-                if system_prompt:
-                    all_messages.append({"role": "system", "content": system_prompt})
-                all_messages.extend(messages)
-
-                if template_override == "Auto (based on last message)":
-                    last_role = messages[-1]["role"] if messages else "user"
-                    add_gen = last_role == "user"
-                    continue_final = last_role == "assistant"
-                elif template_override == "Force generation prompt":
-                    add_gen = True
-                    continue_final = False
-                else:
-                    add_gen = False
-                    continue_final = True
-
                 prompt_tokens = tokenizer.apply_chat_template(
                     all_messages,
                     add_special_tokens=True,
                     add_generation_prompt=add_gen,
                     continue_final_message=continue_final,
                 )
+                prompt_tokens_list.append(prompt_tokens)
 
-                result = inference.sample_from_tokens(mm, prompt_tokens, params)
-                result_data = result
+            # Fire all requests concurrently, process as they complete
+            results = []
+            for result_data in inference.multi_model_sample_from_tokens(
+                active_models, prompt_tokens_list, params
+            ):
                 results.append(result_data)
+                model_idx = result_data["model_idx"]
 
                 _log_generation(
                     prompt_text=f"[{len(messages)} messages]",
-                    prompt_tokens=prompt_tokens,
-                    mm=mm,
+                    prompt_tokens=result_data["prompt_tokens"],
+                    mm=result_data["model"],
                     outputs=result_data["results"],
                     params=params,
                     system_prompt=system_prompt,
                     messages=all_messages,
                 )
 
-                with placeholders[idx].container():
-                    _render_result_card(idx, result_data, {}, disabled=True)
+                with placeholders[model_idx].container():
+                    _render_result_card(model_idx, result_data, {}, disabled=True)
 
             st.session_state.multi_gen_results = {
                 "messages": messages,

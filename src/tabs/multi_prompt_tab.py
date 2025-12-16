@@ -4,10 +4,12 @@ Multi-prompt tab.
 Run multiple prompts across selected models for batch generation.
 """
 
+from concurrent.futures import as_completed
 from copy import deepcopy
 from datetime import datetime
 
 import streamlit as st
+from tinker import types
 
 from ..dashboard_state import (
     ManagedPrompt,
@@ -318,13 +320,11 @@ def _tokenize_prompt(mp: ManagedPrompt, tokenizer) -> list[int]:
             all_messages.append({"role": "system", "content": mp.system_prompt})
         all_messages.extend(mp.messages)
 
-        if mp.messages:
-            last_role = mp.messages[-1]["role"]
-            add_gen = last_role == "user"
-            continue_final = last_role == "assistant"
-        else:
-            add_gen = True
-            continue_final = False
+        assert all_messages, f"Prompt '{mp.name}' has no messages"
+
+        last_role = mp.messages[-1]["role"] if mp.messages else "system"
+        add_gen = last_role == "user"
+        continue_final = last_role == "assistant"
 
         return tokenizer.apply_chat_template(
             all_messages,
@@ -338,39 +338,105 @@ def _run_multi_prompt_generation(
     active_prompts: list[ManagedPrompt],
     selected_models: list,
 ) -> None:
-    """Run generation across all prompts and models."""
+    """Run generation across all prompts and models concurrently with progressive rendering."""
     params = _get_sampling_params()
     inference = st.session_state.inference
 
-    results = []
-
-    progress = st.progress(0, text="Generating...")
     total = len(active_prompts) * len(selected_models)
-    current = 0
+    progress = st.progress(0, text="Generating...")
 
+    # Create placeholders for progressive rendering
+    # placeholders[prompt_idx][model_idx] = placeholder
+    placeholders = []
     for mp in active_prompts:
-        prompt_results = {"prompt": mp, "models": []}
+        st.markdown(f"### {mp.get_display_name()}")
+        with st.expander("Prompt", expanded=False):
+            if mp.prompt_mode == "messages":
+                for msg in mp.messages:
+                    st.markdown(f"**{msg['role']}:** {msg['content']}")
+            else:
+                st.code(mp.content, language="text", wrap_lines=True)
 
-        for mm in selected_models:
+        cols = st.columns(min(len(selected_models), 3))
+        prompt_placeholders = []
+        for model_idx, mm in enumerate(selected_models):
+            col_idx = model_idx % len(cols)
+            with cols[col_idx]:
+                placeholder = st.empty()
+                with placeholder.container():
+                    with st.expander(mm.config.name, expanded=True):
+                        st.info("Waiting...")
+                prompt_placeholders.append(placeholder)
+        placeholders.append(prompt_placeholders)
+        st.markdown("---")
+
+    # Prepare all combinations and fire requests
+    future_to_info = {}
+    for prompt_idx, mp in enumerate(active_prompts):
+        for model_idx, mm in enumerate(selected_models):
             tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
             prompt_tokens = _tokenize_prompt(mp, tokenizer)
 
-            result = inference.sample_from_tokens(mm, prompt_tokens, params)
-            _log_generation(
-                mp=mp,
-                prompt_tokens=prompt_tokens,
-                mm=mm,
-                outputs=result["results"],
-                params=params,
-            )
-            prompt_results["models"].append(result)
-
-            current += 1
-            progress.progress(
-                current / total, text=f"Generating... ({current}/{total})"
+            sampling_cl = inference._get_sampling_client(mm.config.sampler_path)
+            prompt = types.ModelInput.from_ints(prompt_tokens)
+            tinker_params = types.SamplingParams(
+                max_tokens=params.max_tokens,
+                temperature=params.temperature,
+                top_p=params.top_p,
             )
 
-        results.append(prompt_results)
+            future = sampling_cl.sample(
+                prompt=prompt,
+                sampling_params=tinker_params,
+                num_samples=params.n,
+            )
+            future_to_info[future] = (prompt_idx, model_idx, mp, mm, prompt_tokens)
+
+    # Collect results and update placeholders as they complete
+    results_grid = [[None] * len(selected_models) for _ in active_prompts]
+    current = 0
+
+    for future in as_completed(future_to_info):
+        prompt_idx, model_idx, mp, mm, prompt_tokens = future_to_info[future]
+        result = future.result()
+
+        tokenizer = inference.get_tokenizer(mm.config.tokenizer_id)
+        samples = [
+            tokenizer.decode(seq.tokens, skip_special_tokens=params.skip_special_tokens)
+            for seq in result.sequences
+        ]
+
+        result_data = {
+            "model": mm,
+            "results": samples,
+            "prompt_tokens": prompt_tokens,
+        }
+        results_grid[prompt_idx][model_idx] = result_data
+
+        # Update placeholder with result
+        with placeholders[prompt_idx][model_idx].container():
+            with st.expander(mm.config.name, expanded=True):
+                render_sample_cycler(
+                    samples=samples,
+                    component_id=f"mp_gen_{mp.prompt_id}_{mm.model_id}",
+                    height=200,
+                )
+
+        _log_generation(
+            mp=mp,
+            prompt_tokens=prompt_tokens,
+            mm=mm,
+            outputs=samples,
+            params=params,
+        )
+
+        current += 1
+        progress.progress(current / total, text=f"Generating... ({current}/{total})")
+
+    # Save final results
+    results = []
+    for prompt_idx, mp in enumerate(active_prompts):
+        results.append({"prompt": mp, "models": results_grid[prompt_idx]})
 
     progress.empty()
     st.session_state.multi_prompt_results = results
@@ -403,7 +469,7 @@ def _render_results() -> None:
                     render_sample_cycler(
                         samples=model_result["results"],
                         component_id=f"mp_cycler_{mp.prompt_id}_{mm.model_id}",
-                        height=200,
+                        height=400,
                     )
 
         st.markdown("---")
@@ -443,13 +509,16 @@ def render_multi_prompt_tab() -> None:
         )
 
     with col3:
-        if st.button(
+        run_clicked = st.button(
             f"Run ({len(active_prompts)})",
             use_container_width=True,
             disabled=not active_prompts or not selected_models,
-        ):
-            _run_multi_prompt_generation(active_prompts, selected_models)
-            st.rerun(scope="fragment")
+        )
+
+    # Run generation outside column context for full-width output
+    if run_clicked:
+        _run_multi_prompt_generation(active_prompts, selected_models)
+        st.rerun(scope="fragment")
 
     prompts_tab, results_tab = st.tabs(["Prompts", "Results"])
 
