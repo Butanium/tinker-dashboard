@@ -5,6 +5,7 @@ Run multiple prompts across selected models for batch generation.
 """
 
 from copy import deepcopy
+from datetime import datetime
 
 import streamlit as st
 
@@ -14,6 +15,8 @@ from ..dashboard_state import (
     load_prompts_from_folder,
     unload_folder_prompts,
     get_unique_name,
+    GenerationLog,
+    save_generation_log,
 )
 from ..folder_manager_ui import FolderManagerUI, FolderManagerConfig
 from ..inference import SamplingParams
@@ -31,6 +34,44 @@ def _get_sampling_params() -> SamplingParams:
         seed=sp.get("seed"),
         skip_special_tokens=sp.get("skip_special_tokens", False),
     )
+
+
+def _log_generation(
+    mp: ManagedPrompt,
+    prompt_tokens: list[int],
+    mm,
+    outputs: list[str],
+    params: SamplingParams,
+) -> None:
+    """Log a generation to disk."""
+    logs_dir = st.session_state.cache_dir / "generation_logs"
+
+    if mp.prompt_mode == "messages":
+        prompt_text = f"[{len(mp.messages)} messages]"
+        messages = mp.messages
+    else:
+        prompt_text = mp.content
+        messages = []
+
+    log = GenerationLog(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        generation_type="multi_prompt",
+        prompt_text=prompt_text,
+        prompt_tokens=prompt_tokens,
+        model_name=mm.config.name,
+        sampler_path=mm.config.sampler_path,
+        sampling_params={
+            "max_tokens": params.max_tokens,
+            "temperature": params.temperature,
+            "top_p": params.top_p,
+            "n": params.n,
+            "seed": params.seed,
+        },
+        outputs=outputs,
+        system_prompt=mp.system_prompt,
+        messages=messages,
+    )
+    save_generation_log(logs_dir, log)
 
 
 def _create_new_prompt(folder: str | None) -> ManagedPrompt:
@@ -315,6 +356,13 @@ def _run_multi_prompt_generation(
             prompt_tokens = _tokenize_prompt(mp, tokenizer)
 
             result = inference.sample_from_tokens(mm, prompt_tokens, params)
+            _log_generation(
+                mp=mp,
+                prompt_tokens=prompt_tokens,
+                mm=mm,
+                outputs=result["results"],
+                params=params,
+            )
             prompt_results["models"].append(result)
 
             current += 1

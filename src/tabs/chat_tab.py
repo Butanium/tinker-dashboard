@@ -4,11 +4,13 @@ Chat tab.
 Interactive chat interface with model selection and message editing.
 """
 
+from datetime import datetime
 from typing import Any
 
 import streamlit as st
 
 from ..inference import SamplingParams
+from ..dashboard_state import GenerationLog, save_generation_log
 
 
 def _get_sampling_params(n: int = 1) -> SamplingParams:
@@ -37,6 +39,37 @@ def _save_all_conversations() -> None:
     """Save all conversations."""
     for conv_id in st.session_state.conversations:
         _save_conversation(conv_id)
+
+
+def _log_chat_generation(
+    mm,
+    prompt_tokens: list[int],
+    outputs: list[str],
+    params: SamplingParams,
+    system_prompt: str = "",
+    messages: list[dict] | None = None,
+) -> None:
+    """Log a chat generation to disk."""
+    logs_dir = st.session_state.cache_dir / "generation_logs"
+    log = GenerationLog(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        generation_type="chat",
+        prompt_text=messages[-1]["content"] if messages else "",
+        prompt_tokens=prompt_tokens,
+        model_name=mm.config.name,
+        sampler_path=mm.config.sampler_path,
+        sampling_params={
+            "max_tokens": params.max_tokens,
+            "temperature": params.temperature,
+            "top_p": params.top_p,
+            "n": params.n,
+            "seed": params.seed,
+        },
+        outputs=outputs,
+        system_prompt=system_prompt,
+        messages=messages or [],
+    )
+    save_generation_log(logs_dir, log)
 
 
 def create_conversation(
@@ -114,7 +147,18 @@ def _generate_response(
 
     params = _get_sampling_params(n=1)
     result = inference.sample_from_tokens(mm, prompt_tokens, params)
-    return result["results"][0]
+    response = result["results"][0]
+
+    _log_chat_generation(
+        mm=mm,
+        prompt_tokens=prompt_tokens,
+        outputs=[response],
+        params=params,
+        system_prompt=conv.get("system_prompt", ""),
+        messages=messages,
+    )
+
+    return response
 
 
 def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
@@ -151,6 +195,14 @@ def _handle_multi_sample(conv_id: str, conv: dict[str, Any]) -> None:
             result = inference.sample_from_tokens(mm, prompt_tokens, params)
 
         conv["cached_samples"] = result["results"]
+        _log_chat_generation(
+            mm=mm,
+            prompt_tokens=prompt_tokens,
+            outputs=result["results"],
+            params=params,
+            system_prompt=conv.get("system_prompt", ""),
+            messages=messages,
+        )
         _save_conversation(conv_id)
 
     samples = conv["cached_samples"]
@@ -211,6 +263,14 @@ def _handle_multi_model(conv_id: str, conv: dict[str, Any]) -> None:
                 )
 
                 result = inference.sample_from_tokens(mm, prompt_tokens, params)
+                _log_chat_generation(
+                    mm=mm,
+                    prompt_tokens=prompt_tokens,
+                    outputs=result["results"],
+                    params=params,
+                    system_prompt=conv.get("system_prompt", ""),
+                    messages=messages,
+                )
                 results.append(
                     {
                         "model_id": mm.model_id,
