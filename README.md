@@ -1,3 +1,6 @@
+# ⚠️ DISCLAIMER: BE CAREFUL WITH USING AS IS
+I didn't work with reasoning before, which poses interesting challenge like e.g. where do you put the prefill etc. I think this dashboard has still a few bugs related to chat template, so be careful when using it (e.g. check the raw string sent as request in the foldable "prompt" elements). PR welcome! 
+
 # Tinker Dashboard
 
 A Streamlit-based web application for sampling from and comparing multiple language models. Tinker Dashboard provides a unified interface for multi-model inference, allowing you to evaluate and compare model outputs across different sampling parameters.
